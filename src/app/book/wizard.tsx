@@ -122,7 +122,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
       <header className="sticky top-0 z-40 border-b border-line bg-porcelain/90 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-5 sm:px-8">
           <Logo />
-          <ol className="ml-auto hidden items-center gap-1 md:flex" aria-label="Booking progress">
+          <ol className="ml-auto hidden items-center gap-1 lg:flex" aria-label="Booking progress">
             {STEPS.map((s, i) => {
               if (i === accountStep && !needsAccount) return null;
               const done = i < step, cur = i === step;
@@ -136,9 +136,9 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
               );
             })}
           </ol>
-          <p className="ml-auto text-sm text-muted md:hidden">Step {step + 1 - (step > accountStep && !needsAccount ? 1 : 0)} of {needsAccount ? 7 : 6}</p>
+          <p className="ml-auto text-sm text-muted lg:hidden">Step {step + 1 - (step > accountStep && !needsAccount ? 1 : 0)} of {needsAccount ? 7 : 6}</p>
         </div>
-        <div className="h-1 bg-midnight-50 md:hidden"><div className="h-full bg-blush-400 transition-all" style={{ width: `${((step + 1) / 7) * 100}%` }} /></div>
+        <div className="h-1 bg-midnight-50 lg:hidden"><div className="h-full bg-blush-400 transition-all" style={{ width: `${((step + 1) / 7) * 100}%` }} /></div>
       </header>
 
       <div className="mx-auto grid max-w-7xl gap-8 px-5 pb-32 pt-8 sm:px-8 lg:grid-cols-[1fr_380px] lg:pb-16">

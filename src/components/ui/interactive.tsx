@@ -163,10 +163,10 @@ export function MenuItem({ children, onClick, icon: Icon, danger, href }: { chil
 /* ───────────── Tabs (state) ───────────── */
 export function Tabs<T extends string>({ value, onChange, items, className }: { value: T; onChange: (v: T) => void; items: { value: T; label: React.ReactNode; count?: number }[]; className?: string }) {
   return (
-    <div className={cn("inline-flex rounded-xl bg-midnight-50 p-1", className)} role="tablist">
+    <div className={cn("no-scrollbar inline-flex max-w-full overflow-x-auto rounded-xl bg-midnight-50 p-1", className)} role="tablist">
       {items.map((i) => (
         <button key={i.value} role="tab" aria-selected={value === i.value} onClick={() => onChange(i.value)}
-          className={cn("flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition",
+          className={cn("flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-[13px] font-medium transition sm:px-3.5",
             value === i.value ? "bg-white text-ink shadow-sm" : "text-muted hover:text-midnight-800")}>
           {i.label}
           {i.count !== undefined && <span className="text-[11px] opacity-60">{i.count}</span>}

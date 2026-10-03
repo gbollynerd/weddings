@@ -67,9 +67,14 @@
   :focus-visible { outline: 2px solid var(--color-blush-400); outline-offset: 2px; }
   ::selection { background: var(--color-blush-200); }
   input, textarea, select, button { font: inherit; }
+  /* Let grid items shrink below their content width so one wide child (a table, a
+     scrolling tab strip, a long word) can't push the whole column off-screen. */
+  .grid > * { min-width: 0; }
 }
 
 @layer components {
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
   .card { @apply bg-white rounded-[var(--radius-card)] shadow-[var(--shadow-card)] border border-line/60; }
   .skeleton {
     @apply rounded-lg;

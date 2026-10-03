@@ -171,7 +171,7 @@ export function AvailabilityCalendar({ days, bookings, rules }: { days: Day[]; b
                         <p className="font-medium text-ink">{r.weekdays.map((w) => DOW[w]).join(", ")} · <span className={r.status === "available" ? "text-success-700" : "text-muted"}>{r.status}</span></p>
                         <p className="text-[12px] text-muted">{fmtDate(r.start, "MMM d")} – {fmtDate(r.end, "MMM d, yyyy")}{r.note ? ` · ${r.note}` : ""}</p>
                       </div>
-                      <button onClick={() => setRuleToDelete(r)} className="text-midnight-300 hover:text-danger-500" aria-label="Delete rule"><Trash2 className="size-4" /></button>
+                      <button onClick={() => setRuleToDelete(r)} className="-m-2 grid size-9 shrink-0 place-items-center rounded-lg text-midnight-300 hover:bg-danger-50 hover:text-danger-500" aria-label="Delete rule"><Trash2 className="size-4" /></button>
                     </li>
                   ))}
                 </ul>

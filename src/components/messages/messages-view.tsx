@@ -42,7 +42,7 @@ export function MessagesView({ me, convos, thread, weddings, contacts }: {
   return (
     <div className="card flex h-[calc(100vh-170px)] min-h-[560px] overflow-hidden">
       {/* Conversation list */}
-      <aside className={cn("flex w-full flex-col border-r border-line md:w-[340px] md:shrink-0", activeId && "hidden md:flex")}>
+      <aside className={cn("flex w-full flex-col border-line lg:w-[340px] lg:border-r lg:shrink-0", activeId && "hidden lg:flex")}>
         <div className="space-y-3 border-b border-line p-4">
           <div className="flex items-center justify-between">
             <h2 className="font-semibold text-ink">Conversations</h2>
@@ -84,7 +84,7 @@ export function MessagesView({ me, convos, thread, weddings, contacts }: {
       </aside>
 
       {/* Thread */}
-      <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden md:flex")}>
+      <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden lg:flex")}>
         {thread ? <ThreadPane me={me} thread={thread} onBack={() => router.push(pathname)} /> : (
           <div className="grid flex-1 place-items-center">
             <EmptyState icon={MessageCircle} title="Select a conversation" description="Messages with coordinators and your wedding teams live here." action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
@@ -144,7 +144,7 @@ function ThreadPane({ me, thread, onBack }: { me: string; thread: Thread; onBack
   return (
     <>
       <header className="flex items-center gap-3 border-b border-line px-4 py-3 sm:px-6">
-        <button onClick={onBack} className="grid size-9 place-items-center rounded-full hover:bg-canvas md:hidden" aria-label="Back to conversations"><ArrowLeft className="size-5" /></button>
+        <button onClick={onBack} className="grid size-9 place-items-center rounded-full hover:bg-canvas lg:hidden" aria-label="Back to conversations"><ArrowLeft className="size-5" /></button>
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-ink">{thread.subject}</p>
           <p className="truncate text-[12px] text-muted">{others.map((p) => `${p.full_name} (${roleLabel[p.role] ?? p.role})`).join(", ")}</p>

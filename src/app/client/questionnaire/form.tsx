@@ -40,7 +40,7 @@ export function QuestionnaireForm({ weddingId, couple, status, answers: initial,
           <div className="flex-1">
             <div className="flex items-center gap-2"><p className="font-serif text-2xl text-ink">{couple} — wedding questionnaire</p></div>
             <p className="mt-1 text-sm text-muted">Shared with your coordinator and assigned team. You can update it any time before the wedding.</p>
-            <div className="mt-3 flex items-center gap-3"><Progress value={(filled / ALL.length) * 100} tone="blush" className="max-w-xs" /><span className="text-[12px] text-muted">{filled}/{ALL.length} answered</span></div>
+            <div className="mt-3 flex items-center gap-3"><Progress value={(filled / ALL.length) * 100} tone="blush" className="max-w-xs" /><span className="shrink-0 whitespace-nowrap text-[12px] text-muted">{filled}/{ALL.length} answered</span></div>
           </div>
           <StatusBadge status={status} />
         </CardBody>
@@ -58,9 +58,9 @@ export function QuestionnaireForm({ weddingId, couple, status, answers: initial,
           </CardBody>
         </Card>
       ))}
-      <div className="sticky bottom-4 flex justify-end gap-2 rounded-2xl bg-white/90 p-3 shadow-[var(--shadow-pop)] ring-1 ring-line backdrop-blur">
-        <Button variant="outline" icon={Save} loading={pending} onClick={() => save(false)}>Save draft</Button>
-        <Button icon={Send} loading={pending} onClick={() => save(true)}>{status === "submitted" ? "Save & share updates" : "Submit questionnaire"}</Button>
+      <div className="sticky bottom-4 grid grid-cols-[auto_1fr] gap-2 rounded-2xl bg-white/90 p-3 shadow-[var(--shadow-pop)] ring-1 ring-line backdrop-blur sm:flex sm:justify-end">
+        <Button variant="outline" icon={Save} loading={pending} onClick={() => save(false)}><span className="sm:hidden">Save</span><span className="hidden sm:inline">Save draft</span></Button>
+        <Button icon={Send} loading={pending} onClick={() => save(true)}>{status === "submitted" ? <><span className="sm:hidden">Share updates</span><span className="hidden sm:inline">Save &amp; share updates</span></> : <><span className="sm:hidden">Submit</span><span className="hidden sm:inline">Submit questionnaire</span></>}</Button>
       </div>
     </div>
   );

@@ -216,11 +216,13 @@ export function Alert({ tone = "info", title, children, icon: Icon, className, a
   return (
     <div className={cn("flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm", cls, className)} role="status">
       {Icon && <Icon className="mt-0.5 size-4 shrink-0" />}
-      <div className="min-w-0 flex-1">
-        {title && <p className="font-semibold">{title}</p>}
-        {children && <div className={cn(title && "mt-0.5", "opacity-90")}>{children}</div>}
+      <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          {title && <p className="font-semibold">{title}</p>}
+          {children && <div className={cn(title && "mt-0.5", "opacity-90")}>{children}</div>}
+        </div>
+        {action && <div className="shrink-0 self-start">{action}</div>}
       </div>
-      {action}
     </div>
   );
 }

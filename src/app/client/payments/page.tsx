@@ -29,7 +29,26 @@ export default async function ClientPayments() {
       </Card>
       <Card className="overflow-hidden">
         <CardHeader title="Payment schedule & history" subtitle={`Booking ${b.booking_number}`} />
-        <div className="mt-4 overflow-x-auto">
+        {/* Phones: one card per payment */}
+        <ul className="mt-4 divide-y divide-line/70 border-t border-line sm:hidden">
+          {b.payments.map((p) => (
+            <li key={p.id} className="space-y-3 px-5 py-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium text-ink">{KIND[p.kind] ?? p.kind}</p>
+                  <p className="text-[13px] text-muted">Due {fmtDate(p.due_date)}{p.method_brand ? ` · ${p.method_brand} ···· ${p.method_last4}` : ""}</p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="font-semibold text-ink">{money(p.amount)}</p>
+                  <StatusBadge status={p.status} label={p.status === "scheduled" ? "Upcoming" : undefined} />
+                </div>
+              </div>
+              {p.status === "paid" ? <ReceiptButton receipt={{ number: p.receipt_number ?? "—", amount: p.amount, date: p.paid_at ? new Date(p.paid_at).toISOString() : "", method: `${p.method_brand} ···· ${p.method_last4}`, kind: KIND[p.kind] ?? p.kind, booking: b.booking_number, couple: b.couple, pkg: b.package_name, total: b.total, paid: b.paid }} /> : p.status === "scheduled" ? <PayButton paymentId={p.id} amount={p.amount} label={`Pay ${money(p.amount)}`} variant="outline" className="w-full" /> : null}
+            </li>
+          ))}
+        </ul>
+        {/* Tablet and up: table */}
+        <div className="mt-4 hidden overflow-x-auto sm:block">
           <table className="w-full min-w-[640px] text-sm">
             <thead><tr className="border-y border-line bg-canvas/60 text-left text-[12px] uppercase tracking-wide text-muted"><th className="px-6 py-3 font-medium">Payment</th><th className="px-4 py-3 font-medium">Due</th><th className="px-4 py-3 font-medium">Amount</th><th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Method</th><th className="px-6 py-3" /></tr></thead>
             <tbody>
@@ -39,7 +58,7 @@ export default async function ClientPayments() {
                   <td className="px-4 py-3.5 text-midnight-600">{fmtDate(p.due_date)}</td>
                   <td className="px-4 py-3.5 font-semibold text-ink">{money(p.amount)}</td>
                   <td className="px-4 py-3.5"><StatusBadge status={p.status} label={p.status === "scheduled" ? "Upcoming" : undefined} /></td>
-                  <td className="px-4 py-3.5 text-midnight-600">{p.method_brand ? `${p.method_brand} ···· ${p.method_last4}` : "—"}</td>
+                  <td className="whitespace-nowrap px-4 py-3.5 text-midnight-600">{p.method_brand ? `${p.method_brand} ···· ${p.method_last4}` : "—"}</td>
                   <td className="px-6 py-3.5 text-right">{p.status === "paid" ? <ReceiptButton receipt={{ number: p.receipt_number ?? "—", amount: p.amount, date: p.paid_at ? new Date(p.paid_at).toISOString() : "", method: `${p.method_brand} ···· ${p.method_last4}`, kind: KIND[p.kind] ?? p.kind, booking: b.booking_number, couple: b.couple, pkg: b.package_name, total: b.total, paid: b.paid }} /> : p.status === "scheduled" ? <PayButton paymentId={p.id} amount={p.amount} label="Pay" variant="outline" className="" /> : null}</td>
                 </tr>
               ))}

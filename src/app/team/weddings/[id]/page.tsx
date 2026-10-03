@@ -7,12 +7,14 @@ import { Card, CardHeader, CardBody, StatusBadge, DescList, Avatar, Badge, Butto
 import { money, ROLE_LABEL } from "@/lib/pricing";
 import { fmtLong, fmtTime, fmtDate, daysUntil, bytes, cn } from "@/lib/utils";
 import { WeddingDocuments, PrepConfirm, QuickMessage } from "./client";
+import { LocationCard, ShareDetails } from "./logistics";
+import { mapLinks } from "@/lib/maps";
 
 export const metadata = { title: "Wedding details" };
 
 export default async function WeddingDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { member } = await currentMember();
+  const { user, member } = await currentMember();
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
   const data = await weddingForMember(member.id, id);
   if (!data) notFound();
@@ -22,6 +24,14 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
   const status = a.wedding_status === "cancelled" ? "cancelled" : past ? "completed" : a.status === "accepted" ? "confirmed" : a.status;
   const isVideo = a.role.includes("video");
   const q = (questionnaire?.answers ?? {}) as Record<string, string>;
+  const fullAddress = a.venue_address || `${a.venue_name}, ${a.city}, ${a.state}`;
+  const shareInfo = {
+    couple: a.couple, dateLong: fmtLong(a.wedding_date), dateShort: fmtDate(a.wedding_date, "EEE MMM d"),
+    callTime: fmtTime(a.call_time), coverage: `${a.coverage_hours} hrs coverage`, role: ROLE_LABEL[a.role],
+    venue: a.venue_name, address: fullAddress, ceremony: w?.ceremony_location ?? null, reception: w?.reception_location ?? null,
+    firstEvents: timeline.slice(0, 6).map((t) => ({ time: fmtTime(t.time), title: t.title })),
+    coordinator: "Grace Thompson", onCall: "(704) 555-0199", weddingId: id,
+  };
 
   return (
     <div className="space-y-6">
@@ -35,10 +45,11 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
             <h2 className="mt-3 font-serif text-3xl text-ink">{a.couple}</h2>
             <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-midnight-600">
               <span className="flex items-center gap-1.5"><CalendarDays className="size-4 text-midnight-300" />{fmtLong(a.wedding_date)}</span>
-              <span className="flex items-center gap-1.5"><MapPin className="size-4 text-midnight-300" />{a.venue_name}, {a.city}, {a.state}</span>
+              <a href={mapLinks(fullAddress).view} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 underline decoration-midnight-200 underline-offset-4 hover:text-ink hover:decoration-midnight-400"><MapPin className="size-4 text-midnight-300" />{a.venue_name}, {a.city}, {a.state}</a>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <ShareDetails info={shareInfo} me={{ email: user.email, phone: user.phone ?? null }} />
             {conversationId && <ButtonLink href={`/team/messages?c=${conversationId}`} variant="outline" icon={MessageCircle}>Message team</ButtonLink>}
             <ButtonLink href={`/team/uploads${isVideo ? "/video" : ""}?wedding=${id}`} icon={UploadCloud}>{past ? "Upload files" : "Uploads"}</ButtonLink>
           </div>
@@ -102,6 +113,7 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
         </div>
 
         <div className="space-y-6">
+          <LocationCard venue={a.venue_name} address={fullAddress} />
           <Card>
             <CardHeader title="Wedding team" />
             <CardBody className="space-y-3">

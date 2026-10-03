@@ -213,11 +213,11 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
                         <tr key={f.id} className="border-b border-line/70 last:border-0">
                           <td className="max-w-[260px] px-6 py-3"><span className="flex items-center gap-2 truncate font-medium text-ink"><Icon className="size-4 shrink-0 text-midnight-300" />{f.filename}</span>{f.error && <span className="block text-[12px] text-danger-500">{f.error}</span>}</td>
                           <td className="px-4 py-3 capitalize text-midnight-600">{f.category}</td>
-                          <td className="px-4 py-3 text-midnight-600">{bytes(Number(f.size_bytes))}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{bytes(Number(f.size_bytes))}</td>
                           {kind === "video" && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
                           <td className="px-4 py-3"><StatusBadge status={f.status} />{f.status === "processing" && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-muted"><Clock className="size-3" />few min</span>}</td>
-                          <td className="px-4 py-3 text-midnight-600">{ago(f.created_at)}</td>
-                          <td className="px-4 py-3 text-right">{f.status === "failed" && <button onClick={() => run(() => deleteUploadAction(f.id), { onSuccess: () => router.refresh() })} className="text-midnight-300 hover:text-danger-500" aria-label="Remove failed file"><Trash2 className="size-4" /></button>}</td>
+                          <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{ago(f.created_at)}</td>
+                          <td className="px-4 py-3 text-right">{f.status === "failed" && <button onClick={() => run(() => deleteUploadAction(f.id), { onSuccess: () => router.refresh() })} className="-m-2 inline-grid size-9 place-items-center rounded-lg text-midnight-300 hover:bg-danger-50 hover:text-danger-500" aria-label="Remove failed file"><Trash2 className="size-4" /></button>}</td>
                         </tr>
                       ))}
                     </tbody>

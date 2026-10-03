@@ -28,7 +28,7 @@ function TagInput({ value, onChange, suggestions, placeholder, max = 8 }: { valu
       <div className="flex min-h-11 flex-wrap items-center gap-1.5 rounded-xl border border-line bg-white px-2 py-1.5 focus-within:border-midnight-300 focus-within:ring-4 focus-within:ring-midnight-50">
         {value.map((t) => (
           <span key={t} className="inline-flex items-center gap-1 rounded-lg bg-midnight-50 px-2 py-1 text-[13px] text-midnight-700">{t}
-            <button type="button" onClick={() => onChange(value.filter((x) => x !== t))} aria-label={`Remove ${t}`} className="text-midnight-400 hover:text-danger-500"><X className="size-3" /></button>
+            <button type="button" onClick={() => onChange(value.filter((x) => x !== t))} aria-label={`Remove ${t}`} className="-my-1.5 -mr-2 grid size-7 place-items-center rounded-full text-midnight-400 hover:bg-danger-50 hover:text-danger-500"><X className="size-3.5" /></button>
           </span>
         ))}
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={value.length ? "" : placeholder}
