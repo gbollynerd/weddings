@@ -1,0 +1,100 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+
+/* ───────────── Visual Weddings design tokens — "Midnight & Blush" ───────────── */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Fraunces Variable", ui-serif, Georgia, serif;
+
+  --color-midnight-50: #f2f3f8;
+  --color-midnight-100: #e3e5ef;
+  --color-midnight-200: #c5c9dd;
+  --color-midnight-300: #9ca2c2;
+  --color-midnight-400: #6e76a0;
+  --color-midnight-500: #4a527f;
+  --color-midnight-600: #363e68;
+  --color-midnight-700: #2a3157;
+  --color-midnight-800: #222848;
+  --color-midnight-900: #1b2140;
+  --color-midnight-950: #12162b;
+
+  --color-blush-50: #fdf6f5;
+  --color-blush-100: #f9e9e7;
+  --color-blush-200: #f2d2ce;
+  --color-blush-300: #e8b6af;
+  --color-blush-400: #d99a92;
+  --color-blush-500: #c97c73;
+  --color-blush-600: #b0635b;
+  --color-blush-700: #8e4d47;
+
+  --color-porcelain: #fbf8f7;
+  --color-canvas: #f5f6fa;
+  --color-ink: #1b2140;
+  --color-muted: #7a80a3;
+  --color-line: #e8eaf2;
+
+  --color-success-50: #ebf7f1;
+  --color-success-500: #2f9e6e;
+  --color-success-700: #1f7350;
+  --color-warning-50: #fdf5e6;
+  --color-warning-500: #d9922b;
+  --color-warning-700: #9a6413;
+  --color-danger-50: #fcedf0;
+  --color-danger-500: #d6455d;
+  --color-danger-700: #a62a40;
+  --color-info-50: #eef1fd;
+  --color-info-500: #4d63d8;
+
+  --radius-card: 1.25rem;
+  --shadow-card: 0 1px 2px rgba(27, 33, 64, 0.04), 0 4px 16px rgba(27, 33, 64, 0.04);
+  --shadow-pop: 0 12px 40px rgba(27, 33, 64, 0.16);
+
+  --animate-fade-in: fade-in 160ms ease-out;
+  --animate-pop-in: pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
+  --animate-slide-in: slide-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  --animate-shimmer: shimmer 1.4s linear infinite;
+
+  @keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes pop-in { from { opacity: 0; transform: translateY(8px) scale(0.98) } to { opacity: 1; transform: none } }
+  @keyframes slide-in { from { transform: translateX(100%) } to { transform: none } }
+  @keyframes shimmer { from { background-position: -400px 0 } to { background-position: 400px 0 } }
+}
+
+@layer base {
+  html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body { @apply bg-porcelain text-ink font-sans; }
+  :focus-visible { outline: 2px solid var(--color-blush-400); outline-offset: 2px; }
+  ::selection { background: var(--color-blush-200); }
+  input, textarea, select, button { font: inherit; }
+}
+
+@layer components {
+  .card { @apply bg-white rounded-[var(--radius-card)] shadow-[var(--shadow-card)] border border-line/60; }
+  .skeleton {
+    @apply rounded-lg;
+    background: linear-gradient(90deg, #eef0f6 0, #f7f8fb 40px, #eef0f6 80px);
+    background-size: 800px 100%;
+    animation: var(--animate-shimmer);
+  }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: var(--color-midnight-100) transparent; }
+
+  /* Long-form content (handbook, documents) */
+  .prose-vw { @apply text-[15px] leading-7 text-midnight-700; }
+  .prose-vw h2 { @apply font-semibold text-ink text-lg mt-8 mb-3; }
+  .prose-vw h3 { @apply font-semibold text-ink mt-6 mb-2; }
+  .prose-vw p { @apply my-3; }
+  .prose-vw ul { @apply list-disc pl-5 my-3 space-y-1.5; }
+  .prose-vw ol { @apply list-decimal pl-5 my-3 space-y-1.5; }
+  .prose-vw strong { @apply text-ink font-semibold; }
+  .prose-vw code { @apply bg-midnight-50 text-midnight-700 rounded px-1.5 py-0.5 text-[13px]; }
+  .prose-vw blockquote { @apply border-l-4 border-blush-300 bg-blush-50 rounded-r-xl px-4 py-3 my-4 text-midnight-700; }
+  .prose-vw table { @apply w-full text-sm my-4 border-collapse overflow-hidden rounded-xl; }
+  .prose-vw th { @apply text-left bg-midnight-50 text-midnight-600 font-medium px-3 py-2; }
+  .prose-vw td { @apply border-t border-line px-3 py-2 align-top; }
+  .prose-vw a { @apply text-blush-600 underline underline-offset-2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
+}

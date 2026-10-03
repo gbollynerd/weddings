@@ -1,0 +1,10 @@
+node_modules
+.next
+.env*.local
+.env
+local-storage
+*.tsbuildinfo
+next-env.d.ts
+
+# local archives
+*.tar.gz

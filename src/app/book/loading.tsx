@@ -1,0 +1,1 @@
+export default function Loading() { return <div className="grid min-h-screen place-items-center bg-porcelain"><div className="size-10 animate-spin rounded-full border-4 border-midnight-100 border-t-midnight-900" /></div>; }

@@ -1,0 +1,2 @@
+import { Rocket, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen, type LucideIcon } from "lucide-react";
+export const HB_ICONS: Record<string, LucideIcon> = { Rocket, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen };
