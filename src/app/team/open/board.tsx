@@ -193,10 +193,10 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
   return (
     <article className={cn("card flex flex-col overflow-hidden transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-pop)]", muted && "opacity-75")}>
       <div className="flex items-start gap-4 p-5">
-        <div className={cn("grid size-16 shrink-0 place-items-center rounded-2xl text-center leading-none", muted ? "bg-midnight-50 text-muted" : "bg-midnight-900 text-white")}>
-          <span className="text-[11px] font-semibold uppercase opacity-70">{fmtDate(i.wedding_date, "MMM")}</span>
-          <span className="mt-0.5 text-2xl font-semibold">{fmtDate(i.wedding_date, "d")}</span>
-          <span className="mt-0.5 text-[10px] opacity-60">{fmtDate(i.wedding_date, "EEE")}</span>
+        <div className={cn("w-16 shrink-0 overflow-hidden rounded-2xl bg-white text-center shadow-sm ring-1", muted ? "ring-line" : "ring-blush-100")} aria-label={fmtDate(i.wedding_date, "EEEE, MMMM d")}>
+          <div className={cn("py-1 text-[10px] font-semibold uppercase tracking-[0.16em]", muted ? "bg-midnight-50 text-muted" : "bg-blush-400 text-white")}>{fmtDate(i.wedding_date, "MMM")}</div>
+          <div className={cn("pt-1.5 font-serif text-[26px] leading-none", muted ? "text-muted" : "text-ink")}>{fmtDate(i.wedding_date, "d")}</div>
+          <div className="pb-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted">{fmtDate(i.wedding_date, "EEE")}</div>
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
@@ -225,10 +225,12 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
         {!i.eligible && i.view_status === "available" && <p className="mt-3 text-[12px] text-muted">Open to {i.role.endsWith("photo") ? "photographers" : "videographers"} only.</p>}
       </div>
       <div className="flex gap-2 px-5 pb-5">
+        {i.view_status === "available" && (
+          <Button variant="ghost" size="icon" onClick={onDecline} aria-label="Decline" title="Decline" className="shrink-0 border border-danger-500/25 text-danger-500 hover:border-danger-500/40 hover:bg-danger-50 hover:text-danger-500"><XCircle className="size-5" /></Button>
+        )}
         <Button variant="outline" className="flex-1" onClick={onView}>View details</Button>
         {i.view_status === "available" && (
           <>
-            <Button variant="ghost" size="icon" onClick={onDecline} aria-label="Decline" title="Decline"><XCircle className="size-5" /></Button>
             <Button className="flex-1" onClick={onAccept} disabled={!i.eligible || i.conflict || (!!i.calendar && i.calendar !== "available")}>{i.requires_approval ? "Request" : "Accept"}</Button>
           </>
         )}
