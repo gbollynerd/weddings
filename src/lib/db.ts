@@ -53,28 +53,38 @@ const CLOSE_IDLE = process.env.VW_CLOSE_IDLE ? process.env.VW_CLOSE_IDLE === "1"
 const IDLE_CLOSE_MS = 250;
 let inflight = 0;
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
+// Resolves the waitUntil() promise for the pending idle-close. It MUST be called whenever
+// the timer is cancelled, or Vercel keeps the function alive until its 300s timeout.
+let releaseIdle: (() => void) | null = null;
 
 function waitUntil(p: Promise<unknown>) {
   const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[Symbol.for("@vercel/request-context")];
   try { ctx?.get?.()?.waitUntil?.(p); } catch {}
 }
+function cancelIdle() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  const r = releaseIdle; releaseIdle = null; r?.();
+}
 function begin() {
   inflight++;
-  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  cancelIdle();
 }
 function finish() {
   inflight = Math.max(0, inflight - 1);
   if (!CLOSE_IDLE || inflight > 0) return;
-  if (idleTimer) clearTimeout(idleTimer);
+  cancelIdle();
   let release!: () => void;
   const kept = new Promise<void>((r) => (release = r));
+  const safety = setTimeout(() => release(), 5_000); // never hold the function longer than this
+  releaseIdle = () => { clearTimeout(safety); release(); };
   idleTimer = setTimeout(() => {
     idleTimer = null;
+    const done = releaseIdle; releaseIdle = null;
     if (inflight === 0) {
       const old = current;
       current = create();
-      old.end({ timeout: 1 }).catch(() => {}).finally(release);
-    } else release();
+      old.end({ timeout: 1 }).catch(() => {}).finally(() => done?.());
+    } else done?.();
   }, IDLE_CLOSE_MS);
   waitUntil(kept);
 }
