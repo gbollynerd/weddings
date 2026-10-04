@@ -233,7 +233,13 @@ export async function startConversationAction(input: { subject: string; body: st
       where w.id = ${input.weddingId} and (c.user_id = ${user.id} or exists (select 1 from wedding_assignments a join team_members t on t.id = a.team_member_id where a.wedding_id = w.id and t.user_id = ${user.id}))`;
     if (!ok && user.role !== "coordinator" && user.role !== "admin") return { ok: false, message: "You can't message about that wedding." };
   }
-  const id = await startConversation(user.id, input.subject.trim(), input.body.trim(), { weddingId: input.weddingId, includeUserIds: input.to });
+  if (user.role !== "client" && !(input.to ?? []).length) return { ok: false, message: "Choose who to send this to.", fieldErrors: { to: "Pick at least one person" } };
+  let id: string;
+  try {
+    id = await startConversation(user.id, input.subject.trim(), input.body.trim(), { weddingId: input.weddingId, includeUserIds: input.to });
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "Couldn't send that message." };
+  }
   revalidatePath("/", "layout");
   return { ok: true, message: "Message sent", data: { id } };
 }

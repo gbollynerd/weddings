@@ -55,24 +55,44 @@ export async function sendMessage(userId: string, conversationId: string, body: 
   return m;
 }
 
-/** Start a conversation with the coordinator team (and optional wedding context). */
+const STAFF = ["coordinator", "admin"];
+const TEAM = ["photographer", "videographer"];
+
+/**
+ * Who may message whom:
+ * - coordinators, admins, photographers and videographers can message each other freely
+ * - clients only ever talk to coordinators/admins — never directly to photographers or videographers
+ */
 export async function startConversation(userId: string, subject: string, body: string, opts: { weddingId?: string | null; includeUserIds?: string[] } = {}) {
-  const coords = await sql`select id from users where role = 'coordinator' order by created_at limit 1`;
-  const ids = new Set<string>([userId, ...coords.map((c) => c.id as string), ...(opts.includeUserIds ?? [])]);
-  const [c] = await sql`insert into conversations (subject, kind, wedding_id) values (${subject}, ${opts.weddingId ? "wedding" : subject.toLowerCase().includes("payment") || subject.toLowerCase().includes("support") ? "support" : "direct"}, ${opts.weddingId ?? null}) returning id`;
+  const [me] = await sql`select role from users where id = ${userId}`;
+  const isClient = me?.role === "client";
+  const asked = [...new Set((opts.includeUserIds ?? []).filter((x) => x !== userId))];
+  const allowedRoles = isClient ? STAFF : [...STAFF, ...TEAM];
+  const picked = asked.length
+    ? await sql`select u.id from users u left join team_members t on t.user_id = u.id
+        where u.id in ${sql(asked)} and u.status = 'active' and u.role in ${sql(allowedRoles)} and (t.id is null or t.status = 'active')`
+    : [];
+  const ids = new Set<string>([userId, ...picked.map((r) => r.id as string)]);
+  // Clients always reach a coordinator; staff/team threads need at least one recipient (default: a coordinator)
+  if (isClient || ids.size === 1) {
+    const [coord] = await sql`select id from users where role = 'coordinator' and status = 'active' order by created_at limit 1`;
+    if (coord) ids.add(coord.id);
+  }
+  if (ids.size === 1) throw new Error("Choose who to send this to.");
+  const kind = opts.weddingId ? "wedding" : subject.toLowerCase().includes("payment") || subject.toLowerCase().includes("support") ? "support" : "direct";
+  const [c] = await sql`insert into conversations (subject, kind, wedding_id) values (${subject}, ${kind}, ${opts.weddingId ?? null}) returning id`;
   for (const id of ids) await sql`insert into conversation_participants (conversation_id, user_id) values (${c.id}, ${id})`;
   await sendMessage(userId, c.id, body);
   return c.id as string;
 }
 
-/** People a user may start a thread with (coordinators + teammates on shared weddings). */
-export async function contactsFor(userId: string) {
-  return sql`
-    select distinct u.id, u.full_name, u.avatar_url, u.role from users u where u.role = 'coordinator'
-    union
-    select distinct u.id, u.full_name, u.avatar_url, u.role
-    from wedding_assignments a1 join team_members t1 on t1.id = a1.team_member_id and t1.user_id = ${userId}
-    join wedding_assignments a2 on a2.wedding_id = a1.wedding_id and a2.id <> a1.id
-    join team_members t2 on t2.id = a2.team_member_id join users u on u.id = t2.user_id
-    order by 2`;
+export type Contact = { id: string; full_name: string; avatar_url: string | null; role: string };
+/** People a user may start a thread with. Clients: coordinators/admins only. Everyone else: all active staff and team. */
+export async function contactsFor(userId: string): Promise<Contact[]> {
+  const [me] = await sql`select role from users where id = ${userId}`;
+  const roles = me?.role === "client" ? STAFF : [...STAFF, ...TEAM];
+  return sql<Contact[]>`
+    select u.id, u.full_name, u.avatar_url, u.role from users u left join team_members t on t.user_id = u.id
+    where u.id <> ${userId} and u.status = 'active' and u.role in ${sql(roles)} and (t.id is null or t.status = 'active')
+    order by case when u.role in ('coordinator','admin') then 0 else 1 end, u.full_name`;
 }

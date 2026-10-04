@@ -16,8 +16,9 @@ export type Thread = { id: string; subject: string; kind: string; couple: string
 const roleLabel: Record<string, string> = { coordinator: "Coordinator", photographer: "Photographer", videographer: "Videographer", client: "Client", admin: "Admin" };
 const kindIcon = { wedding: Heart, support: LifeBuoy, direct: MessageCircle } as Record<string, typeof Heart>;
 
-export function MessagesView({ me, convos, thread, weddings, contacts }: {
-  me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: { id: string; full_name: string; role: string }[];
+type Contact = { id: string; full_name: string; role: string; avatar_url: string | null };
+export function MessagesView({ me, convos, thread, weddings, contacts, isClient }: {
+  me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; isClient: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -87,12 +88,12 @@ export function MessagesView({ me, convos, thread, weddings, contacts }: {
       <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden lg:flex")}>
         {thread ? <ThreadPane me={me} thread={thread} onBack={() => router.push(pathname)} /> : (
           <div className="grid flex-1 place-items-center">
-            <EmptyState icon={MessageCircle} title="Select a conversation" description="Messages with coordinators and your wedding teams live here." action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
+            <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins, photographers and videographers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
           </div>
         )}
       </section>
 
-      <ComposeModal open={compose} onClose={() => setCompose(false)} weddings={weddings} contacts={contacts}
+      <ComposeModal open={compose} onClose={() => setCompose(false)} weddings={weddings} contacts={contacts} isClient={isClient}
         onSent={(id) => { setCompose(false); router.push(`${pathname}?c=${id}`); router.refresh(); }} />
     </div>
   );
@@ -205,49 +206,79 @@ function ThreadPane({ me, thread, onBack }: { me: string; thread: Thread; onBack
   );
 }
 
-function ComposeModal({ open, onClose, weddings, contacts, onSent }: { open: boolean; onClose: () => void; weddings: { id: string; couple: string; date: string }[]; contacts: { id: string; full_name: string; role: string }[]; onSent: (id: string) => void }) {
+const ROLE_GROUP: [string, string[]][] = [["Coordinators & admins", ["coordinator", "admin"]], ["Photographers", ["photographer"]], ["Videographers", ["videographer"]]];
+
+function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: { open: boolean; onClose: () => void; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; onSent: (id: string) => void; isClient: boolean }) {
   const { run, pending } = useAction();
   const [topic, setTopic] = React.useState("general");
   const [subject, setSubject] = React.useState("");
   const [weddingId, setWeddingId] = React.useState("");
   const [to, setTo] = React.useState<string[]>([]);
+  const [q, setQ] = React.useState("");
   const [body, setBody] = React.useState("");
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
     if (topic === "payments") setSubject((s) => s || "Payments question");
     if (topic === "support") setSubject((s) => s || "Support request");
   }, [topic]);
-  const teammates = contacts.filter((c) => c.role !== "coordinator");
+  const toggle = (id: string) => { setTo((t) => (t.includes(id) ? t.filter((x) => x !== id) : [...t, id])); setErrors((e) => ({ ...e, to: "" })); };
+  const shown = contacts.filter((c) => !q || c.full_name.toLowerCase().includes(q.toLowerCase()));
   const submit = () => {
     const w = weddings.find((x) => x.id === weddingId);
     const subj = subject || (w ? `${w.couple} — question` : "");
+    if (!isClient && !to.length) { setErrors((e) => ({ ...e, to: "Pick at least one person" })); return; }
     run(async () => {
-      const r = await startConversationAction({ subject: subj, body, weddingId: weddingId || null, to });
+      const r = await startConversationAction({ subject: subj, body, weddingId: weddingId || null, to: isClient ? [] : to });
       if (!r.ok) setErrors(r.fieldErrors ?? {});
       return r;
-    }, { onSuccess: (d) => { setSubject(""); setBody(""); setWeddingId(""); setTo([]); setErrors({}); onSent(d!.id); } });
+    }, { onSuccess: (d) => { setSubject(""); setBody(""); setWeddingId(""); setTo([]); setQ(""); setErrors({}); onSent(d!.id); } });
   };
   return (
-    <Modal open={open} onClose={onClose} title="New message" description="Your coordinator is always included."
+    <Modal open={open} onClose={onClose} title="New message"
+      description={isClient ? "Your coordinator handles your messages and loops in your photo/video team when needed." : "Message coordinators, admins and other photographers & videographers."}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button icon={Send} loading={pending} onClick={submit}>Send message</Button></>}>
       <div className="space-y-4">
+        {!isClient && (
+          <Field label="To" required error={errors.to}>
+            <div className="rounded-2xl border border-line">
+              {to.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 border-b border-line p-2">
+                  {to.map((id) => { const c = contacts.find((x) => x.id === id); return c ? <button key={id} type="button" onClick={() => toggle(id)} className="inline-flex items-center gap-1 rounded-full bg-midnight-900 px-2.5 py-1 text-[12px] text-white" aria-label={`Remove ${c.full_name}`}>{c.full_name}<X className="size-3" /></button> : null; })}
+                </div>
+              )}
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people" aria-label="Search people" className="h-10 rounded-none border-0 focus:ring-0" />
+              <div className="max-h-48 overflow-y-auto border-t border-line p-1.5 scrollbar-thin">
+                {ROLE_GROUP.map(([label, roles]) => {
+                  const list = shown.filter((c) => roles.includes(c.role));
+                  if (!list.length) return null;
+                  return (
+                    <div key={label}>
+                      <p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+                      {list.map((c) => (
+                        <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
+                          <input type="checkbox" className="size-4 accent-midnight-900" checked={to.includes(c.id)} onChange={() => toggle(c.id)} />
+                          <span className="flex-1 truncate text-ink">{c.full_name}</span>
+                          <span className="text-[11px] capitalize text-muted">{c.role}</span>
+                        </label>
+                      ))}
+                    </div>
+                  );
+                })}
+                {shown.length === 0 && <p className="px-2 py-3 text-[13px] text-muted">Nobody matches.</p>}
+              </div>
+            </div>
+          </Field>
+        )}
         <Field label="Topic">
-          <div className="grid grid-cols-3 gap-2">
-            {[["general", "General", MessageCircle], ["wedding", "A wedding", Heart], ["payments", "Payments", Users], ["support", "Support", LifeBuoy]].slice(0, weddings.length ? 4 : 3).map(([v, l, I]) => {
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[["general", "General", MessageCircle], ["wedding", "A wedding", Heart], ["payments", "Payments", Users], ["support", "Support", LifeBuoy]].filter(([v]) => v !== "wedding" || weddings.length).map(([v, l, I]) => {
               const Icon = I as typeof Heart;
               return <button key={v as string} type="button" onClick={() => setTopic(v as string)} className={cn("flex items-center justify-center gap-1.5 rounded-xl border px-2 py-2.5 text-[13px] font-medium", topic === v ? "border-midnight-900 bg-midnight-900 text-white" : "border-line text-midnight-600 hover:bg-canvas")}><Icon className="size-4" />{l as string}</button>;
             })}
           </div>
         </Field>
-        {(topic === "wedding" || weddings.length > 0) && topic === "wedding" && (
+        {topic === "wedding" && weddings.length > 0 && (
           <Field label="Wedding"><Select value={weddingId} onChange={(e) => setWeddingId(e.target.value)}><option value="">Choose a wedding…</option>{weddings.map((w) => <option key={w.id} value={w.id}>{w.couple} · {fmtDate(w.date, "MMM d, yyyy")}</option>)}</Select></Field>
-        )}
-        {teammates.length > 0 && (
-          <Field label="Also include (optional)">
-            <div className="flex flex-wrap gap-2">
-              {teammates.map((c) => <button key={c.id} type="button" onClick={() => setTo((t) => (t.includes(c.id) ? t.filter((x) => x !== c.id) : [...t, c.id]))} className={cn("rounded-full border px-3 py-1 text-[12px]", to.includes(c.id) ? "border-blush-400 bg-blush-50 text-blush-700" : "border-line text-midnight-600")}>{c.full_name}</button>)}
-            </div>
-          </Field>
         )}
         <Field label="Subject" error={errors.subject}><Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="What's this about?" aria-invalid={!!errors.subject} /></Field>
         <Field label="Message" error={errors.body}><Textarea value={body} onChange={(e) => setBody(e.target.value)} className="min-h-[120px]" aria-invalid={!!errors.body} /></Field>

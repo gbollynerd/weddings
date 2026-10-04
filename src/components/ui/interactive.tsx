@@ -132,24 +132,47 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 export const useToast = () => React.useContext(ToastCtx).push;
 
 /* ───────────── Menu (dropdown) ───────────── */
+/**
+ * Dropdown menu. Rendered in a portal with fixed positioning so it's never clipped by a card or
+ * table with overflow hidden, and it opens upward when there isn't room below.
+ */
 export function Menu({ trigger, children, align = "right", className }: { trigger: (p: { open: boolean; toggle: () => void }) => React.ReactNode; children: (close: () => void) => React.ReactNode; align?: "left" | "right"; className?: string }) {
   const [open, setOpen] = React.useState(false);
   const ref = React.useRef<HTMLDivElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const [pos, setPos] = React.useState<React.CSSProperties | null>(null);
+  const place = React.useCallback(() => {
+    const t = ref.current?.getBoundingClientRect();
+    const m = menuRef.current;
+    if (!t) return;
+    const mh = m?.offsetHeight ?? 0, mw = m?.offsetWidth ?? 200, gap = 8, vh = window.innerHeight, vw = window.innerWidth;
+    const below = vh - t.bottom, above = t.top;
+    const up = mh > 0 && below < mh + gap + 8 && above > below;
+    let left = align === "right" ? t.right - mw : t.left;
+    left = Math.max(8, Math.min(left, vw - mw - 8));
+    setPos({ position: "fixed", left, top: up ? Math.max(8, t.top - mh - gap) : t.bottom + gap, transformOrigin: up ? "bottom" : "top" });
+  }, [align]);
+  React.useLayoutEffect(() => { if (open) place(); else setPos(null); }, [open, place]);
   React.useEffect(() => {
     if (!open) return;
-    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    const h = (e: MouseEvent) => { const n = e.target as Node; if (!ref.current?.contains(n) && !menuRef.current?.contains(n)) setOpen(false); };
     const k = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const close = () => setOpen(false);
     document.addEventListener("mousedown", h);
     document.addEventListener("keydown", k);
-    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); };
-  }, [open]);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", place, true);
+    return () => { document.removeEventListener("mousedown", h); document.removeEventListener("keydown", k); window.removeEventListener("resize", close); window.removeEventListener("scroll", place, true); };
+  }, [open, place]);
   return (
     <div ref={ref} className="relative">
       {trigger({ open, toggle: () => setOpen((o) => !o) })}
-      {open && (
-        <div className={cn("absolute z-50 mt-2 min-w-[200px] origin-top rounded-2xl border border-line bg-white p-1.5 shadow-[var(--shadow-pop)] animate-pop-in", align === "right" ? "right-0" : "left-0", className)} role="menu">
+      {open && typeof document !== "undefined" && createPortal(
+        <div ref={menuRef} style={pos ?? { position: "fixed", visibility: "hidden", top: 0, left: 0 }}
+          className={cn("z-[90] min-w-[200px] rounded-2xl border border-line bg-white p-1.5 shadow-[var(--shadow-pop)] animate-pop-in", className)} role="menu">
           {children(() => setOpen(false))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -537,3 +537,9 @@ alter table wedding_change_requests drop constraint if exists wedding_change_req
 alter table wedding_change_requests add constraint wedding_change_requests_kind_check check (kind in ('package','date','venue','details'));
 alter table wedding_change_requests add column if not exists payload jsonb;
 alter table wedding_change_requests add column if not exists before jsonb;
+
+-- ───────────────────────── Messaging rule ─────────────────────────
+-- Clients talk to coordinators/admins only: remove any photographer/videographer from threads a client is in.
+delete from conversation_participants p using users u
+where u.id = p.user_id and u.role in ('photographer','videographer')
+  and exists (select 1 from conversation_participants p2 join users c on c.id = p2.user_id where p2.conversation_id = p.conversation_id and c.role = 'client');

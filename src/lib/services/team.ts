@@ -205,7 +205,9 @@ export async function acceptOpportunity(member: Member, assignmentId: string, si
 
 /** Add someone to a wedding's team message threads (not the couple's private thread). */
 export async function joinWeddingThreads(db: typeof sql, weddingId: string, userId: string) {
-  const convs = await db`select id from conversations where wedding_id = ${weddingId} and kind = 'wedding' and subject not like '%your wedding team%'`;
+  // Team threads only — never a conversation the couple is part of
+  const convs = await db`select c.id from conversations c where c.wedding_id = ${weddingId} and c.kind = 'wedding'
+    and not exists (select 1 from conversation_participants p join users u on u.id = p.user_id where p.conversation_id = c.id and u.role = 'client')`;
   for (const c of convs) await db`insert into conversation_participants (conversation_id, user_id) values (${c.id}, ${userId}) on conflict do nothing`;
 }
 export async function leaveWeddingThreads(db: typeof sql, weddingId: string, userId: string) {
