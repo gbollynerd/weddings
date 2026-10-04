@@ -29,8 +29,7 @@ export default async function Landing() {
         <div className="absolute inset-x-0 bottom-0 -z-10 h-40 bg-gradient-to-t from-midnight-950/80 to-transparent" />
         <div className="mx-auto max-w-7xl px-5 pb-20 pt-36 sm:px-8 lg:pb-28 lg:pt-44">
           <div className="max-w-2xl">
-            <p className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/5 px-3 py-1 text-[13px] text-blush-200 backdrop-blur"><Sparkles className="size-3.5" />Wedding photography & film in {cat.markets.length} cities</p>
-            <h1 className="mt-6 font-serif text-5xl leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">Your day,<br /><span className="italic text-blush-300">beautifully</span> remembered.</h1>
+            <h1 className="font-serif text-5xl leading-[1.05] tracking-tight sm:text-6xl lg:text-7xl">Your day,<br /><span className="italic text-blush-300">beautifully</span> remembered.</h1>
             <p className="mt-6 max-w-xl text-lg leading-8 text-white/75">Visual Weddings pairs you with a vetted local photographer and filmmaker, with transparent pricing and a planning dashboard that keeps everything in one place.</p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Link href="/book" className={buttonClass("blush", "lg", "rounded-full px-7")}>Book Your Wedding <ArrowRight className="size-4" /></Link>
