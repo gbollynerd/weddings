@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { MapPin, Church, PartyPopper, Package as PackageIcon, CalendarClock, Hourglass, X, CheckCircle2, XCircle, Info, Camera, Video, Sparkles, AlertTriangle } from "lucide-react";
 import { Button, Field, Input, Textarea, Badge, Alert, Checkbox } from "@/components/ui";
 import { Modal, useAction } from "@/components/ui/interactive";
+import { AddressInput, needsConfirmation, type AddressStatus } from "@/components/ui/address-input";
 import { updateVenueAction, requestPackageChangeAction, requestDateChangeAction, cancelChangeRequestAction } from "@/lib/actions/changes";
 import { checkAvailabilityAction } from "@/lib/actions/booking";
 import { money } from "@/lib/pricing";
@@ -55,7 +56,17 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
   const { run, pending } = useAction();
   const [f, setF] = React.useState(venue);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
-  React.useEffect(() => { if (open) { setF(venue); setErrors({}); } }, [open, venue]);
+  // Address checks: status per field, addresses filled from our venue list are trusted
+  const [addr, setAddr] = React.useState<{ c: AddressStatus; r: AddressStatus }>({ c: "unchanged", r: "unchanged" });
+  const [trusted, setTrusted] = React.useState({ c: false, r: false });
+  const [confirmUnverified, setConfirmUnverified] = React.useState(false);
+  React.useEffect(() => { if (open) { setF(venue); setErrors({}); setTrusted({ c: false, r: false }); setConfirmUnverified(false); } }, [open, venue]);
+  const onC = React.useCallback((st: AddressStatus) => { setAddr((a) => ({ ...a, c: st })); setConfirmUnverified(false); }, []);
+  const onR = React.useCallback((st: AddressStatus) => { setAddr((a) => ({ ...a, r: st })); setConfirmUnverified(false); }, []);
+  const unverified = [
+    needsConfirmation(addr.c) && f.ceremonyAddress.trim() ? `Ceremony: ${f.ceremonyAddress.trim()}` : null,
+    !f.receptionSame && needsConfirmation(addr.r) && f.receptionAddress.trim() ? `Reception: ${f.receptionAddress.trim()}` : null,
+  ].filter(Boolean) as string[];
   type K = keyof VenueForm;
   const set = (k: K) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = k === "receptionSame" ? e.target.checked : e.target.value;
@@ -64,7 +75,10 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
       // Picking a known venue fills in its address (unless the client already typed a different one)
       const fill = (nameKey: K, addrKey: K, original: string) => {
         const hit = venueOptions.find((o) => o.name.toLowerCase() === String(v).toLowerCase());
-        if (k === nameKey && hit && (!s[addrKey] || s[addrKey] === original)) (next[addrKey] as string) = hit.address;
+        if (k === nameKey && hit && (!s[addrKey] || s[addrKey] === original)) {
+          (next[addrKey] as string) = hit.address;
+          setTrusted((t) => ({ ...t, [addrKey === "ceremonyAddress" ? "c" : "r"]: true }));
+        }
       };
       fill("ceremonyVenue", "ceremonyAddress", venue.ceremonyAddress);
       fill("receptionVenue", "receptionAddress", venue.receptionAddress);
@@ -72,8 +86,14 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
     });
     setErrors((x) => ({ ...x, [k]: "" }));
   };
+  const setAddress = (k: "ceremonyAddress" | "receptionAddress") => (v: string) => {
+    setF((s) => ({ ...s, [k]: v }));
+    setTrusted((t) => ({ ...t, [k === "ceremonyAddress" ? "c" : "r"]: false }));
+    setErrors((x) => ({ ...x, [k]: "" }));
+  };
   const save = (e?: React.FormEvent) => {
     e?.preventDefault();
+    if (unverified.length && !confirmUnverified) { setConfirmUnverified(true); return; }
     run(async () => {
       const r = await updateVenueAction(weddingId, f);
       if (!r.ok && r.fieldErrors) setErrors(r.fieldErrors);
@@ -85,7 +105,7 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
   return (
     <Modal open={open} onClose={onClose} size="lg" icon={<span className="grid size-10 place-items-center rounded-2xl bg-blush-50 text-blush-600"><MapPin className="size-5" /></span>}
       title="Edit venues" description="Where your ceremony and reception take place. Changes save right away and your team is notified."
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save()} loading={pending}>Save changes</Button></>}>
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save()} loading={pending}>{confirmUnverified && unverified.length ? "Save anyway" : "Save changes"}</Button></>}>
       <form onSubmit={save} className="space-y-4">
         <datalist id="cv-venues">{venueOptions.map((o) => <option key={o.name} value={o.name} />)}</datalist>
 
@@ -98,8 +118,9 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
             </Field>
             <Field label="Room or area" hint="Optional" htmlFor="cv-c-area"><Input id="cv-c-area" value={f.ceremonyArea} onChange={set("ceremonyArea")} placeholder="e.g. Garden lawn" /></Field>
           </div>
-          <Field label="Address" error={errors.ceremonyAddress} hint="Used for your team's directions" htmlFor="cv-c-address">
-            <Input id="cv-c-address" value={f.ceremonyAddress} onChange={set("ceremonyAddress")} placeholder="Street, city" />
+          <Field label="Address" error={errors.ceremonyAddress} htmlFor="cv-c-address">
+            <AddressInput id="cv-c-address" value={f.ceremonyAddress} onChange={setAddress("ceremonyAddress")} onStatus={onC} initialValue={venue.ceremonyAddress}
+              trusted={trusted.c} hint="Used for your team's directions" placeholder="Start typing the street address" />
           </Field>
         </fieldset>
 
@@ -119,13 +140,20 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
                 </Field>
                 <Field label="Room or area" hint="Optional" htmlFor="cv-r-area"><Input id="cv-r-area" value={f.receptionArea} onChange={set("receptionArea")} placeholder="e.g. Grand ballroom" /></Field>
               </div>
-              <Field label="Address" error={errors.receptionAddress} hint="Used for your team's directions" htmlFor="cv-r-address">
-                <Input id="cv-r-address" value={f.receptionAddress} onChange={set("receptionAddress")} placeholder="Street, city" />
+              <Field label="Address" error={errors.receptionAddress} htmlFor="cv-r-address">
+                <AddressInput id="cv-r-address" value={f.receptionAddress} onChange={setAddress("receptionAddress")} onStatus={onR} initialValue={venue.receptionAddress}
+                  trusted={trusted.r} hint="Used for your team's directions" placeholder="Start typing the street address" />
               </Field>
             </>
           )}
         </fieldset>
 
+        {confirmUnverified && unverified.length > 0 && (
+          <Alert tone="warning" icon={AlertTriangle} title={unverified.length > 1 ? "We couldn't verify these addresses" : "We couldn't verify this address"}>
+            <ul className="mt-1 space-y-0.5">{unverified.map((u) => <li key={u}>{u}</li>)}</ul>
+            <p className="mt-1">Your team uses it for directions. Pick a suggestion or check it — or choose <b>Save anyway</b> if it&apos;s correct.</p>
+          </Alert>
+        )}
         <p className="flex items-start gap-2 rounded-2xl bg-canvas p-3 text-[12px] text-muted"><Info className="mt-0.5 size-3.5 shrink-0" />Moving outside your booked city? Message your coordinator first — travel may affect pricing.</p>
         <button type="submit" className="hidden" />
       </form>

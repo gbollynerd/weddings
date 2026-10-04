@@ -10,6 +10,7 @@ import {
 import { Logo } from "@/components/brand/logo";
 import { Button, Field, Input, Select, Textarea, Alert, Badge, Checkbox } from "@/components/ui";
 import { Modal, Tabs, useToast } from "@/components/ui/interactive";
+import { AddressInput } from "@/components/ui/address-input";
 import { checkAvailabilityAction, createBookingAction } from "@/lib/actions/booking";
 import { signupClient, loginInline, logoutAction } from "@/lib/actions/auth";
 import { quote, marketPrice, money, DEPOSIT_RATE } from "@/lib/pricing";
@@ -41,6 +42,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
     details: { ...emptyDetails, partnerOne: initialMe?.partnerOne ?? "", partnerTwo: initialMe?.partnerTwo ?? "", email: initialMe?.email ?? "", phone: initialMe?.phone ?? "" }, plan: "deposit",
   });
   const [errors, setErrors] = React.useState<Record<string, string>>({});
+  const [addrTrusted, setAddrTrusted] = React.useState(false);
   const [avail, setAvail] = React.useState<Avail>(null);
   const [checking, setChecking] = React.useState(false);
   const [compare, setCompare] = React.useState(false);
@@ -164,10 +166,10 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
                   <Input type="date" min={minDate} value={d.date} onChange={(e) => set("date", e.target.value)} aria-invalid={!!errors.date} />
                 </Field>
                 <Field label="Venue" error={errors.venue} required className="sm:col-span-2">
-                  <Input list="venues" value={d.venue} onChange={(e) => { set("venue", e.target.value); const v = catalog.venues.find((x) => x.name === e.target.value); if (v) set("venueAddress", v.address); }} placeholder="Venue name — or “Not booked yet”" aria-invalid={!!errors.venue} />
+                  <Input list="venues" value={d.venue} onChange={(e) => { set("venue", e.target.value); const v = catalog.venues.find((x) => x.name === e.target.value); if (v) { set("venueAddress", v.address); setAddrTrusted(true); } }} placeholder="Venue name — or “Not booked yet”" aria-invalid={!!errors.venue} />
                   <datalist id="venues">{catalog.venues.filter((v) => v.market === d.market).map((v) => <option key={v.id} value={v.name}>{v.kind}</option>)}<option value="Not booked yet" /></datalist>
                 </Field>
-                <Field label="Venue address" hint="Optional — helps us plan travel" className="sm:col-span-2"><Input value={d.venueAddress} onChange={(e) => set("venueAddress", e.target.value)} placeholder="Street, city" /></Field>
+                <Field label="Venue address" className="sm:col-span-2" htmlFor="bk-address"><AddressInput id="bk-address" value={d.venueAddress} onChange={(v) => { set("venueAddress", v); setAddrTrusted(false); }} trusted={addrTrusted} hint="Optional — helps us plan travel" placeholder="Start typing the street address" /></Field>
               </div>
               <AvailabilityCard avail={avail} checking={checking} date={d.date} city={market ? `${market.city}, ${market.state}` : ""} onPick={(x) => set("date", x)} />
               <p className="mt-4 text-[13px] text-muted">Getting married somewhere else? <Link href="mailto:hello@visualweddings.example" className="font-medium text-blush-600 underline">Ask about destination weddings</Link>.</p>
