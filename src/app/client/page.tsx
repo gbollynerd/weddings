@@ -6,6 +6,9 @@ import { money, ROLE_LABEL } from "@/lib/pricing";
 import { fmtLong, fmtDate, fmtTime, daysUntil, cn } from "@/lib/utils";
 import { IMG, unsplash } from "@/content/catalog";
 import { PayButton } from "./pay-button";
+import { ChangeActions, ChangeRequestList, type ChangeProps } from "./changes";
+import { sql } from "@/lib/db";
+import { marketPrice } from "@/lib/pricing";
 
 export const metadata = { title: "My Wedding" };
 
@@ -28,6 +31,22 @@ export default async function ClientHome() {
     { done: b.deliverables.length > 0, label: "Gallery delivered", sub: d < 0 ? "In editing" : `~${Math.round(b.turnaround_days / 7)} weeks after`, href: "/client/documents" },
   ];
   const progress = Math.round((steps.filter((s) => s.done).length / steps.length) * 100);
+  const canChange = d >= 0 && b.status !== "cancelled" && b.status !== "completed";
+  const [pkgs, venues] = canChange
+    ? await Promise.all([
+        sql`select slug, name, tagline, service_slug, hours, base_price, popular from packages where active order by sort`,
+        sql`select name, coalesce(address, '') as address from venues where market_id = ${b.market_id} order by name`,
+      ])
+    : [[], []];
+  const change: ChangeProps = {
+    weddingId: b.wedding_id, weddingDate: b.wedding_date, daysToGo: d, market: b.market_slug, service: b.service_slug,
+    packageSlug: b.package_slug, packageName: b.package_name, packagePrice: b.package_price, total: b.total, balance: b.balance,
+    venue: { name: b.venue_name ?? "", address: b.venue_address ?? "", ceremony: b.ceremony_location ?? "", reception: b.reception_location ?? "" },
+    venueOptions: venues.map((v) => ({ name: v.name, address: v.address })),
+    packages: pkgs.map((x) => ({ slug: x.slug, name: x.name, tagline: x.tagline ?? "", service_slug: x.service_slug, hours: x.hours, popular: x.popular, price: marketPrice(x.base_price, b.price_multiplier) })),
+    addons: b.addons.map((a) => ({ name: a.name, applies_to: a.applies_to, line: a.unit_price * Math.max(1, a.quantity) })),
+    requests: b.changeRequests.map((r) => ({ ...r, created_at: new Date(r.created_at).toISOString(), decided_at: r.decided_at ? new Date(r.decided_at).toISOString() : null })) as ChangeProps["requests"],
+  };
 
   return (
     <div className="space-y-6">
@@ -75,9 +94,11 @@ export default async function ClientHome() {
         </div>
       )}
 
+      <ChangeRequestList requests={change.requests} />
+
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
-          <Card>
+          <Card id="details">
             <CardHeader title="Booking details" action={<Badge tone="success">{b.status === "confirmed" ? "Confirmed" : b.status}</Badge>} />
             <CardBody>
               <DescList cols={3} items={[
@@ -89,6 +110,7 @@ export default async function ClientHome() {
                 {(b.package_deliverables ?? []).map((x: string) => <Badge key={x}>{x}</Badge>)}
                 {b.addons.map((a) => <Badge key={a.name} tone="blush">+ {a.name}{a.quantity > 1 ? ` × ${a.quantity}` : ""}</Badge>)}
               </div>
+              {canChange && <ChangeActions {...change} />}
             </CardBody>
           </Card>
 

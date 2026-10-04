@@ -7,7 +7,9 @@ import { PayButton } from "../pay-button";
 import { ReceiptButton } from "./receipt";
 
 export const metadata = { title: "Payments" };
-const KIND: Record<string, string> = { deposit: "Deposit", balance: "Balance", installment: "Installment", addon: "Add-on" };
+const KIND: Record<string, string> = { deposit: "Deposit", balance: "Balance", installment: "Installment", addon: "Add-on", refund: "Refund" };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const amt = (p: Record<string, any>) => (p.kind === "refund" ? `−${money(p.amount)}` : money(p.amount));
 
 export default async function ClientPayments() {
   const { booking: b } = await currentClient();
@@ -36,10 +38,10 @@ export default async function ClientPayments() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="font-medium text-ink">{KIND[p.kind] ?? p.kind}</p>
-                  <p className="text-[13px] text-muted">Due {fmtDate(p.due_date)}{p.method_brand ? ` · ${p.method_brand} ···· ${p.method_last4}` : ""}</p>
+                  <p className="text-[13px] text-muted">{p.kind === "refund" ? "Issued" : "Due"} {fmtDate(p.due_date)}{p.method_brand ? ` · ${p.method_brand} ···· ${p.method_last4}` : ""}</p>
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="font-semibold text-ink">{money(p.amount)}</p>
+                  <p className="font-semibold text-ink">{amt(p)}</p>
                   <StatusBadge status={p.status} label={p.status === "scheduled" ? "Upcoming" : undefined} />
                 </div>
               </div>
@@ -56,7 +58,7 @@ export default async function ClientPayments() {
                 <tr key={p.id} className="border-b border-line/70 last:border-0">
                   <td className="px-6 py-3.5 font-medium text-ink">{KIND[p.kind] ?? p.kind}</td>
                   <td className="px-4 py-3.5 text-midnight-600">{fmtDate(p.due_date)}</td>
-                  <td className="px-4 py-3.5 font-semibold text-ink">{money(p.amount)}</td>
+                  <td className="px-4 py-3.5 font-semibold text-ink">{amt(p)}</td>
                   <td className="px-4 py-3.5"><StatusBadge status={p.status} label={p.status === "scheduled" ? "Upcoming" : undefined} /></td>
                   <td className="whitespace-nowrap px-4 py-3.5 text-midnight-600">{p.method_brand ? `${p.method_brand} ···· ${p.method_last4}` : "—"}</td>
                   <td className="px-6 py-3.5 text-right">{p.status === "paid" ? <ReceiptButton receipt={{ number: p.receipt_number ?? "—", amount: p.amount, date: p.paid_at ? new Date(p.paid_at).toISOString() : "", method: `${p.method_brand} ···· ${p.method_last4}`, kind: KIND[p.kind] ?? p.kind, booking: b.booking_number, couple: b.couple, pkg: b.package_name, total: b.total, paid: b.paid }} /> : p.status === "scheduled" ? <PayButton paymentId={p.id} amount={p.amount} label="Pay" variant="outline" className="" /> : null}</td>

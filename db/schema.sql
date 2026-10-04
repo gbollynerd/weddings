@@ -406,3 +406,32 @@ create table if not exists reviews (
   featured    boolean not null default false,
   created_at  timestamptz not null default now()
 );
+
+-- ───────────────────────── Client change requests ─────────────────────────
+-- Venue edits apply directly; package and date changes are requests a coordinator approves.
+alter table client_payments drop constraint if exists client_payments_kind_check;
+alter table client_payments add constraint client_payments_kind_check check (kind in ('deposit','balance','installment','addon','refund'));
+
+create table if not exists wedding_change_requests (
+  id               uuid primary key default gen_random_uuid(),
+  wedding_id       uuid not null references weddings(id) on delete cascade,
+  booking_id       uuid not null references bookings(id) on delete cascade,
+  requested_by     uuid references users(id) on delete set null,
+  kind             text not null check (kind in ('package','date')),
+  status           text not null default 'pending' check (status in ('pending','approved','declined','cancelled')),
+  from_package_id  uuid references packages(id),
+  to_package_id    uuid references packages(id),
+  from_date        date,
+  to_date          date,
+  total_before     int,
+  total_after      int,
+  removed_addons   text[] not null default '{}',
+  note             text,
+  decision_note    text,
+  decided_by       uuid references users(id) on delete set null,
+  decided_at       timestamptz,
+  created_at       timestamptz not null default now()
+);
+create index if not exists change_requests_wedding_idx on wedding_change_requests(wedding_id, created_at desc);
+create unique index if not exists change_requests_one_pending on wedding_change_requests(wedding_id, kind) where status = 'pending';
+alter table wedding_change_requests enable row level security;

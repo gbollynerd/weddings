@@ -1,30 +1,40 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, XCircle, FileText, Star, Camera, Video } from "lucide-react";
+import { CheckCircle2, XCircle, FileText, Star, Camera, Video, Package as PackageIcon, CalendarClock, AlertTriangle } from "lucide-react";
 import { Card, CardHeader, CardBody, StatusBadge, Button, EmptyState, Field, Textarea, Avatar, Badge } from "@/components/ui";
 import { Modal, Tabs, useAction } from "@/components/ui/interactive";
 import { reviewLicenseAction, decideRequestAction, markPayoutAction } from "@/lib/actions/admin";
+import { decideChangeRequestAction } from "@/lib/actions/changes";
 import { money, ROLE_LABEL } from "@/lib/pricing";
 import { fmtDate, ago } from "@/lib/utils";
 
 type Any = Record<string, never> & Record<string, string | number | null>;
 const DOC: Record<string, string> = { drivers_license: "Driver's license", insurance: "Liability insurance", w9: "W-9", business_license: "Business license", other: "Other" };
 
-export function AdminBoard({ bookings, licenses, requests, payouts, open, team }: { bookings: Any[]; licenses: Any[]; requests: Any[]; payouts: Any[]; open: Any[]; team: Any[] }) {
+export function AdminBoard({ bookings, licenses, requests, payouts, open, team, changes }: { bookings: Any[]; licenses: Any[]; requests: Any[]; payouts: Any[]; open: Any[]; team: Any[]; changes: Any[] }) {
   const router = useRouter();
   const { run, pending } = useAction();
   const [tab, setTab] = React.useState<"queue" | "bookings" | "slots" | "team">("queue");
   const [reject, setReject] = React.useState<Any | null>(null);
   const [reason, setReason] = React.useState("");
   const done = () => router.refresh();
-  const queueCount = licenses.length + requests.length + payouts.length;
+  const [decide, setDecide] = React.useState<{ r: Any; approve: boolean } | null>(null);
+  const [decisionNote, setDecisionNote] = React.useState("");
+  const queueCount = changes.length + licenses.length + requests.length + payouts.length;
   return (
     <div id="bookings" className="space-y-5">
       <Tabs value={tab} onChange={setTab} items={[{ value: "queue", label: "Action queue", count: queueCount }, { value: "bookings", label: "Bookings", count: bookings.length }, { value: "slots", label: "Open slots", count: open.length }, { value: "team", label: "Team", count: team.length }]} />
 
       {tab === "queue" && (
-        <div className="grid gap-6 xl:grid-cols-3">
+        <div className="grid gap-6 lg:grid-cols-2">
+          <Card>
+            <CardHeader title="Client change requests" subtitle="Package and date changes from couples" />
+            <CardBody className="space-y-3">
+              {changes.length === 0 && <EmptyState icon={CheckCircle2} title="No change requests" className="py-6" />}
+              {changes.map((r) => <ChangeRow key={r.id as string} r={r} onDecide={(approve) => { setDecide({ r, approve }); setDecisionNote(""); }} />)}
+            </CardBody>
+          </Card>
           <Card>
             <CardHeader title="License review" subtitle="Verify compliance documents" />
             <CardBody className="space-y-3">
@@ -118,10 +128,69 @@ export function AdminBoard({ bookings, licenses, requests, payouts, open, team }
         </div>
       )}
 
+      <Modal open={!!decide} onClose={() => setDecide(null)} size="sm"
+        title={decide ? `${decide.approve ? "Approve" : "Decline"} ${decide.r.kind === "package" ? "package" : "date"} change` : ""}
+        description={decide ? `${decide.r.couple} · ${decide.r.booking_number}` : ""}
+        footer={<><Button variant="outline" onClick={() => setDecide(null)}>Cancel</Button>
+          <Button variant={decide?.approve ? "primary" : "danger"} loading={pending}
+            onClick={() => decide && run(() => decideChangeRequestAction(decide.r.id as string, decide.approve, decisionNote), { onSuccess: () => { setDecide(null); done(); } })}>
+            {decide?.approve ? "Approve change" : "Decline"}</Button></>}>
+        {decide && (
+          <div className="space-y-4">
+            {decide.approve && (
+              <ul className="list-disc space-y-1 pl-5 text-sm text-midnight-700">
+                {decide.r.kind === "package" ? <>
+                  <li>Booking moves to <b>{decide.r.to_package}</b> and the total becomes {money(decide.r.total_after as number)}.</li>
+                  <li>The difference is applied to the remaining payment schedule{Number(decide.r.total_after) < Number(decide.r.total_before) ? " (overpayment is refunded)" : ""}.</li>
+                  <li>Team slots and coverage hours are updated; affected team members are notified.</li>
+                </> : <>
+                  <li>The wedding moves to <b>{fmtDate(decide.r.to_date as string)}</b> and payment due dates follow.</li>
+                  <li>Assigned team members are released and asked to re-accept for the new date.</li>
+                </>}
+              </ul>
+            )}
+            <Field label={decide.approve ? "Note to the couple (optional)" : "Reason (shared with the couple)"} required={!decide.approve}>
+              <Textarea value={decisionNote} onChange={(e) => setDecisionNote(e.target.value)} placeholder={decide.approve ? "e.g. All set — see you on the new date!" : "e.g. We don't have a full team that day — could you look at the 14th?"} />
+            </Field>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={!!reject} onClose={() => setReject(null)} size="sm" title="Reject document" description={reject ? `${reject.full_name} · ${reject.file_name}` : ""}
         footer={<><Button variant="outline" onClick={() => setReject(null)}>Cancel</Button><Button variant="danger" loading={pending} onClick={() => reject && run(() => reviewLicenseAction(reject.id as string, "rejected", reason), { onSuccess: () => { setReject(null); done(); } })}>Reject</Button></>}>
         <Field label="Reason (shared with the team member)"><Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. The certificate is expired — please upload the current policy." /></Field>
       </Modal>
+    </div>
+  );
+}
+
+function ChangeRow({ r, onDecide }: { r: Any; onDecide: (approve: boolean) => void }) {
+  const isPkg = r.kind === "package";
+  const diff = isPkg ? Number(r.total_after) - Number(r.total_before) : 0;
+  const avail = r.availability as string | null;
+  const removed = (r.removed_addons as unknown as string[] | null) ?? [];
+  return (
+    <div className="rounded-2xl border border-line p-3">
+      <div className="flex items-start justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-sm font-medium text-ink">{isPkg ? <PackageIcon className="size-4 text-midnight-400" /> : <CalendarClock className="size-4 text-midnight-400" />}{r.couple}</p>
+        <span className="shrink-0 text-[12px] text-muted">{ago(r.created_at as string)}</span>
+      </div>
+      {isPkg ? (
+        <p className="mt-1 text-[13px] text-midnight-700">{r.from_package} → <b className="text-ink">{r.to_package}</b> · <span className={diff < 0 ? "text-success-700" : ""}>{diff === 0 ? "no price change" : `${diff > 0 ? "+" : "−"}${money(Math.abs(diff))}`}</span></p>
+      ) : (
+        <p className="mt-1 text-[13px] text-midnight-700">{fmtDate(r.from_date as string)} → <b className="text-ink">{fmtDate(r.to_date as string)}</b></p>
+      )}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <Badge>{r.booking_number}</Badge><Badge>{r.city}</Badge>
+        {avail && <Badge tone={avail === "available" ? "success" : avail === "limited" ? "warning" : "danger"}>{avail === "available" ? "Team available" : avail === "limited" ? "Limited availability" : "Date fully booked"}</Badge>}
+        {r.days_out != null && Number(r.days_out) <= 90 && <Badge tone="warning">Within 90 days</Badge>}
+      </div>
+      {removed.length > 0 && <p className="mt-2 flex items-start gap-1.5 text-[12px] text-warning-700"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />Removes {removed.join(", ")}</p>}
+      {r.note && <p className="mt-2 rounded-xl bg-canvas px-3 py-2 text-[13px] text-midnight-700">“{r.note}”</p>}
+      <div className="mt-3 flex gap-2">
+        <Button size="sm" onClick={() => onDecide(true)}>Approve</Button>
+        <Button size="sm" variant="outline" onClick={() => onDecide(false)}>Decline</Button>
+      </div>
     </div>
   );
 }

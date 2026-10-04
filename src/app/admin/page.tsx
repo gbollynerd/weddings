@@ -4,20 +4,21 @@ import { sql } from "@/lib/db";
 import { StatCard } from "@/components/ui";
 import { money } from "@/lib/pricing";
 import { AdminBoard } from "./board";
+import { checkAvailability } from "@/lib/services/catalog";
 
 export const metadata = { title: "Operations" };
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 
 export default async function AdminHome() {
   await requireUser(["coordinator", "admin"]);
-  const [[stats], bookings, licenses, requests, payouts, open, team] = await Promise.all([
+  const [[stats], bookings, licenses, requests, payouts, open, team, changes] = await Promise.all([
     sql`select (select count(*) from bookings where status <> 'cancelled')::int as bookings,
-               (select coalesce(sum(amount),0) from client_payments where status = 'paid')::int as revenue,
+               (select coalesce(sum(case when status = 'paid' then amount when kind = 'refund' and status = 'refunded' then -amount else 0 end),0) from client_payments)::int as revenue,
                (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.status = 'open' and w.wedding_date >= current_date)::int as open_slots,
                (select count(*) from licenses where status = 'pending_review')::int as pending_licenses,
                (select count(*) from team_members)::int as team`,
     sql`select b.booking_number, b.total, b.status, b.created_at, w.couple, w.wedding_date::text, m.city, m.state, p.name as package,
-          (select coalesce(sum(amount),0) from client_payments cp where cp.booking_id = b.id and cp.status = 'paid')::int as paid,
+          (select coalesce(sum(case when cp.status = 'paid' then cp.amount when cp.kind = 'refund' and cp.status = 'refunded' then -cp.amount else 0 end),0) from client_payments cp where cp.booking_id = b.id)::int as paid,
           (select count(*) from wedding_assignments a where a.wedding_id = w.id and a.status = 'open')::int as open_slots
         from bookings b join weddings w on w.id = b.wedding_id join markets m on m.id = w.market_id join packages p on p.id = b.package_id
         order by b.created_at desc limit 25`,
@@ -33,7 +34,18 @@ export default async function AdminHome() {
     sql`select u.full_name, u.avatar_url, t.discipline, m.city, t.rating,
           (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.team_member_id = t.id and a.status = 'accepted' and w.wedding_date >= current_date)::int as upcoming
         from team_members t join users u on u.id = t.user_id left join markets m on m.id = t.home_market_id order by u.full_name`,
+    sql`select r.id, r.kind, r.note, r.created_at, r.from_date::text, r.to_date::text, r.total_before, r.total_after, r.removed_addons,
+          w.couple, w.wedding_date::text, m.city, m.slug as market, b.booking_number, b.service_slug, fp.name as from_package, tp.name as to_package
+        from wedding_change_requests r join weddings w on w.id = r.wedding_id join bookings b on b.id = r.booking_id join markets m on m.id = w.market_id
+        left join packages fp on fp.id = r.from_package_id left join packages tp on tp.id = r.to_package_id
+        where r.status = 'pending' order by r.created_at`,
   ]);
+  // Date requests: show the coordinator how the new date looks before approving
+  const changeRows = await Promise.all(changes.map(async (c) => ({
+    ...c, created_at: iso(c.created_at),
+    availability: c.kind === "date" ? (await checkAvailability(c.market, c.to_date, c.service_slug)).level : null,
+    days_out: c.kind === "date" ? Math.round((new Date(c.wedding_date + "T12:00:00").getTime() - Date.now()) / 86400000) : null,
+  })));
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -50,6 +62,7 @@ export default async function AdminHome() {
         payouts={payouts.map((p) => ({ ...p, requested_at: iso(p.requested_at) })) as never}
         open={open.map((o) => ({ ...o, expires_at: iso(o.expires_at) })) as never}
         team={team as never}
+        changes={changeRows as never}
       />
     </div>
   );
