@@ -1,11 +1,11 @@
-import { currentMember } from "@/lib/services/me";
+import { requireActiveMember } from "@/lib/services/me";
 import { availabilityRange } from "@/lib/services/team";
 import { AvailabilityCalendar } from "./calendar";
 
 export const metadata = { title: "Availability" };
 
 export default async function AvailabilityPage() {
-  const { member } = await currentMember();
+  const { member } = await requireActiveMember();
   const start = new Date();
   start.setMonth(start.getMonth() - 2, 1);
   const end = new Date();

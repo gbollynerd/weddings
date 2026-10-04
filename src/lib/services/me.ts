@@ -11,3 +11,10 @@ export const currentMember = cache(async () => {
   if (!member) redirect("/login");
   return { user, member };
 });
+
+/** Pages only approved team members can use (applicants are sent to their application status). */
+export const requireActiveMember = cache(async () => {
+  const r = await currentMember();
+  if (r.member.status !== "active") redirect("/team");
+  return r;
+});

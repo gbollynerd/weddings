@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
 import { z } from "zod";
 import { requireUser } from "@/lib/auth";
 import { sql } from "@/lib/db";
@@ -7,6 +8,7 @@ import * as team from "@/lib/services/team";
 import * as up from "@/lib/services/uploads";
 import { markRead, markUnread } from "@/lib/services/notifications";
 import { sendMessage, startConversation } from "@/lib/services/messages";
+import { geocodeMemberHome } from "@/lib/services/geo";
 import type { ActionResult } from "./types";
 
 async function me() {
@@ -17,13 +19,52 @@ async function me() {
 }
 
 /* Open weddings */
-export async function acceptOpportunityAction(assignmentId: string): Promise<ActionResult<{ status: string; weddingId: string }>> {
+async function signatureMeta() {
+  const h = await headers();
+  return { ip: (h.get("x-forwarded-for") ?? "").split(",")[0].trim() || "local", userAgent: h.get("user-agent")?.slice(0, 300) ?? null };
+}
+export type SignInput = { name: string; agree: boolean; version: number };
+
+/** The filled-in agreement for a slot, shown before signing. */
+export async function contractPreviewAction(assignmentId: string): Promise<ActionResult<{ version: number; title: string; body: string }>> {
   const { member } = await me();
-  const r = await team.acceptOpportunity(member, assignmentId);
-  revalidatePath("/team", "layout");
+  const c = await team.contractPreview(member, assignmentId);
+  return c ? { ok: true, data: c } : { ok: false, message: "This wedding is no longer available." };
+}
+
+export async function acceptOpportunityAction(assignmentId: string, sig: SignInput): Promise<ActionResult<{ status: string; weddingId: string; stale?: boolean }>> {
+  const { member } = await me();
+  const r = await team.acceptOpportunity(member, assignmentId, { ...sig, ...(await signatureMeta()) });
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
+  if (!r.ok) return { ok: false, message: r.message, fieldErrors: "field" in r && r.field ? { name: r.message } : undefined, data: "stale" in r ? { status: "", weddingId: "", stale: true } : undefined };
+  return { ok: true, message: r.status === "pending" ? "Signed — awaiting coordinator approval" : `You're confirmed for ${r.couple}!`, data: { status: r.status, weddingId: r.weddingId } };
+}
+export async function signExistingAction(assignmentId: string, sig: SignInput): Promise<ActionResult> {
+  const { member } = await me();
+  const r = await team.signExisting(member, assignmentId, { ...sig, ...(await signatureMeta()) });
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
+  return r.ok ? { ok: true, message: "Agreement signed — a copy is saved with the wedding" } : { ok: false, message: r.message };
+}
+export async function declineOfferAction(assignmentId: string, reason: string): Promise<ActionResult> {
+  const { member } = await me();
+  const ok = await team.declineOffer(member, assignmentId, reason.trim().slice(0, 300) || "Declined");
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
+  return ok ? { ok: true, message: "Offer declined — we've let the coordinator know" } : { ok: false, message: "This offer is no longer open." };
+}
+export async function requestCancellationAction(assignmentId: string, reason: string): Promise<ActionResult<{ late: boolean }>> {
+  const { member } = await me();
+  const why = reason.trim();
+  if (why.length < 10) return { ok: false, message: "Tell your coordinator why you need to cancel (a sentence or two).", fieldErrors: { reason: "Add a short reason" } };
+  const r = await team.requestCancellation(member, assignmentId, why.slice(0, 1000));
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
   if (!r.ok) return { ok: false, message: r.message };
-  const rr = r as { status: string; weddingId: string; couple: string };
-  return { ok: true, message: rr.status === "pending" ? "Request sent — awaiting coordinator approval" : `You're booked for ${rr.couple}!`, data: { status: rr.status, weddingId: rr.weddingId } };
+  return { ok: true, message: "Request sent — you're still on this wedding until your coordinator confirms", data: { late: r.late } };
+}
+export async function withdrawCancellationAction(assignmentId: string): Promise<ActionResult> {
+  const { member } = await me();
+  const ok = await team.withdrawCancellation(member, assignmentId);
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
+  return ok ? { ok: true, message: "Cancellation request withdrawn" } : { ok: false, message: "There's no pending cancellation request." };
 }
 export async function declineOpportunityAction(assignmentId: string, reason?: string): Promise<ActionResult> {
   const { member } = await me();
@@ -40,7 +81,7 @@ export async function undoDeclineAction(assignmentId: string): Promise<ActionRes
 export async function withdrawRequestAction(assignmentId: string): Promise<ActionResult> {
   const { member } = await me();
   const ok = await team.withdrawRequest(member, assignmentId);
-  revalidatePath("/team", "layout");
+  revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
   return ok ? { ok: true, message: "Request withdrawn" } : { ok: false, message: "Only pending requests can be withdrawn." };
 }
 export async function confirmPrepAction(assignmentId: string): Promise<ActionResult> {
@@ -137,6 +178,8 @@ const ProfileSchema = z.object({
   instagram: z.string().trim().max(60).optional().or(z.literal("")),
   website: z.string().trim().url("Enter a full URL (https://…)").optional().or(z.literal("")),
   avatar_url: z.string().optional(),
+  home_address: z.string().trim().max(200).optional().or(z.literal("")),
+  equipment: z.string().trim().max(600).optional().or(z.literal("")),
 });
 export async function updateProfileAction(input: z.input<typeof ProfileSchema>): Promise<ActionResult> {
   const { member } = await me();
@@ -148,8 +191,13 @@ export async function updateProfileAction(input: z.input<typeof ProfileSchema>):
   }
   if (p.data.avatar_url && p.data.avatar_url.length > 400_000) return { ok: false, message: "That photo is too large." };
   await team.updateProfile(member, { ...p.data, home_market_id: p.data.home_market_id || undefined, avatar_url: p.data.avatar_url === "" ? null : p.data.avatar_url || undefined } as never);
+  let message = "Profile saved";
+  if (p.data.home_address !== undefined && (p.data.home_address || null) !== member.home_address) {
+    const g = await geocodeMemberHome(member.id, p.data.home_address || null);
+    if (p.data.home_address && g === false) message = "Profile saved — we couldn't place that address on the map, so distances use your home market for now";
+  }
   revalidatePath("/team", "layout");
-  return { ok: true, message: "Profile saved" };
+  return { ok: true, message };
 }
 
 /* Notifications */

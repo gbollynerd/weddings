@@ -6,9 +6,10 @@ import { Camera, X, Plus, MapPin, Star, Globe, AtSign, Link2, CheckCircle2, Circ
 import { Card, CardHeader, CardBody, Field, Input, Textarea, Select, Button, Avatar, Progress, Badge } from "@/components/ui";
 import { useAction, useToast } from "@/components/ui/interactive";
 import { updateProfileAction } from "@/lib/actions/team";
+import { AddressInput } from "@/components/ui/address-input";
 import { cn } from "@/lib/utils";
 
-type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; discipline: "photo" | "video"; city: string };
+type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; discipline: "photo" | "video"; city: string; home_address: string; equipment: string; home_located: boolean };
 const SPECIALTY_SUGGESTIONS = { photo: ["Documentary", "Editorial", "Fine art", "Film photography", "Flash at night", "Family formals", "Cultural ceremonies", "Elopements"], video: ["Cinematic films", "Documentary", "Drone (Part 107)", "Audio", "Social teasers", "Multi-cam ceremonies", "Super 8"] };
 
 async function resizeImage(file: File, size = 320): Promise<string> {
@@ -56,7 +57,8 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
   const market = markets.find((m) => m.id === f.home_market_id)?.label ?? member.city;
 
   const save = () => run(async () => {
-    const r = await updateProfileAction({ ...f, avatar_url: f.avatar_url !== member.avatar_url ? f.avatar_url : undefined });
+    const { home_located: _ignored, ...rest } = f;
+    const r = await updateProfileAction({ ...rest, avatar_url: f.avatar_url !== member.avatar_url ? f.avatar_url : undefined });
     setErr(r.fieldErrors ?? {});
     return r;
   }, { onSuccess: () => { setDirty(false); router.refresh(); } });
@@ -98,12 +100,18 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
         <Card>
           <CardHeader title="Work details" />
           <CardBody className="grid gap-4 sm:grid-cols-2">
+            <Field label="Home base address" className="sm:col-span-2" error={err.home_address} htmlFor="pf-home">
+              <AddressInput id="pf-home" value={f.home_address} onChange={(v) => set("home_address", v)} initialValue={member.home_address}
+                hint={member.home_located && f.home_address === member.home_address ? "Distances to weddings are measured from here (straight line). Never shown to couples." : "Used to measure how far each wedding is from you. Never shown to couples."}
+                placeholder="Street address you travel from" />
+            </Field>
             <Field label="Home market" error={err.home_market_id}><Select value={f.home_market_id} onChange={(e) => set("home_market_id", e.target.value)}><option value="">Select…</option>{markets.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}</Select></Field>
             <Field label={`Service area — ${f.service_radius} miles`} error={err.service_radius}>
               <input type="range" min={10} max={300} step={10} value={f.service_radius} onChange={(e) => set("service_radius", Number(e.target.value))} className="mt-3 w-full accent-midnight-900" aria-label="Service radius in miles" />
             </Field>
             <Field label="Specialization" className="sm:col-span-2"><TagInput value={f.specialties} onChange={(v) => set("specialties", v)} suggestions={SPECIALTY_SUGGESTIONS[member.discipline]} placeholder="Type and press Enter" /></Field>
             <Field label="Years of experience" error={err.years_experience}><Input type="number" min={0} max={60} value={f.years_experience} onChange={(e) => set("years_experience", Number(e.target.value))} /></Field>
+            <Field label="Main equipment" className="sm:col-span-2" hint="Bodies, lenses, audio, drone — helps coordinators staff the right person"><Textarea value={f.equipment} onChange={(e) => set("equipment", e.target.value)} className="min-h-[72px]" maxLength={600} /></Field>
             <Field label="Languages"><TagInput value={f.languages} onChange={(v) => set("languages", v)} suggestions={["English", "Spanish", "French", "Portuguese", "Mandarin", "Yoruba", "Hindi"]} placeholder="Add a language" max={6} /></Field>
           </CardBody>
         </Card>

@@ -6,6 +6,7 @@ import { listConversations } from "@/lib/services/messages";
 import { listNotifications } from "@/lib/services/notifications";
 import { Card, CardHeader, CardBody, StatCard, StatusBadge, Avatar, EmptyState, ButtonLink, Badge } from "@/components/ui";
 import { EarningsChart } from "@/components/team/earnings-chart";
+import { ApplicationStatus } from "./application";
 import { ActionList } from "@/components/team/action-list";
 import { money, ROLE_LABEL } from "@/lib/pricing";
 import { fmtDate, fmtTime, daysUntil, chatTime, ago, cn } from "@/lib/utils";
@@ -14,6 +15,7 @@ export const metadata = { title: "Overview" };
 
 export default async function TeamOverview() {
   const { user, member } = await currentMember();
+  if (member.status !== "active") return <ApplicationStatus member={member} />;
   const [upcoming, opps, money_, actions, convos, notes] = await Promise.all([
     myAssignments(member.id, "upcoming"), opportunities(member), earnings(member.id), actionItems(member),
     listConversations(user.id), listNotifications(user.id, "all", 5),

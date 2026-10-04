@@ -1,4 +1,4 @@
-import { currentMember } from "@/lib/services/me";
+import { requireActiveMember } from "@/lib/services/me";
 import { earnings, payouts, payableAssignments, myAssignments } from "@/lib/services/team";
 import { PaymentsView } from "./view";
 
@@ -7,7 +7,7 @@ export const metadata = { title: "Payments" };
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 
 export default async function PaymentsPage() {
-  const { member } = await currentMember();
+  const { member } = await requireActiveMember();
   const [summary, rows, payable, upcoming] = await Promise.all([earnings(member.id), payouts(member.id), payableAssignments(member.id), myAssignments(member.id, "upcoming")]);
   return (
     <PaymentsView

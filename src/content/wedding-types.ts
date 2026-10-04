@@ -1,0 +1,1 @@
+export const WEDDING_TYPES = ["Traditional ceremony & reception", "Garden / outdoor", "Religious ceremony", "Cultural / multi-day", "Black tie", "Rustic / barn", "Elopement / micro wedding", "Destination"] as const;

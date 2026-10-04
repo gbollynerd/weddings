@@ -1,6 +1,8 @@
 import "server-only";
 import { sql, num } from "@/lib/db";
 import { notify } from "./notifications";
+import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
+import { activeTemplate, contractContext, recordSignature, voidContracts, normName, fillTemplate } from "./contracts";
 
 export type Member = {
   id: string; user_id: string; discipline: "photo" | "video"; bio: string | null; home_market_id: string | null;
@@ -8,6 +10,8 @@ export type Member = {
   instagram: string | null; website: string | null; rating: number; payout_method: string | null; payout_last4: string | null;
   city: string | null; state: string | null; market_slug: string | null;
   full_name: string; email: string; phone: string | null; avatar_url: string | null;
+  status: "applicant" | "active" | "rejected" | "inactive"; home_address: string | null; lat: number | null; lng: number | null;
+  equipment: string | null; decision_note: string | null; applied_at: Date | null;
 };
 
 export async function getMember(userId: string): Promise<Member | null> {
@@ -15,7 +19,7 @@ export async function getMember(userId: string): Promise<Member | null> {
     select tm.*, m.city, m.state, m.slug as market_slug, u.full_name, u.email, u.phone, u.avatar_url
     from team_members tm join users u on u.id = tm.user_id left join markets m on m.id = tm.home_market_id
     where tm.user_id = ${userId}`;
-  return m ? ({ ...m, rating: num(m.rating) } as Member) : null;
+  return m ? ({ ...m, rating: num(m.rating), lat: m.lat == null ? null : num(m.lat), lng: m.lng == null ? null : num(m.lng) } as Member) : null;
 }
 
 export const ROLE_PREFIX = (d: "photo" | "video") => (d === "photo" ? ["lead_photo", "second_photo"] : ["lead_video", "second_video"]);
@@ -27,13 +31,18 @@ export type AssignmentRow = {
   prep_confirmed_at: string | null; requires_approval: boolean;
   couple: string; wedding_date: string; start_time: string; venue_name: string; venue_address: string | null; reception_venue_name: string | null; guest_count: number | null;
   wedding_type: string | null; wedding_status: string; city: string; state: string; package_name: string | null; service_slug: string | null;
+  market_slug: string; venue_lat: number | null; venue_lng: number | null; offered_at: string | null;
 };
+
+/** Where a member travels from: their geocoded home base, else their home market's city centre. */
+export const originOf = (m: Pick<Member, "lat" | "lng" | "market_slug">) => ({ lat: m.lat, lng: m.lng, market_slug: m.market_slug });
+export const venueOf = (r: { venue_lat: unknown; venue_lng: unknown; market_slug: string }) => ({ lat: r.venue_lat, lng: r.venue_lng, market_slug: r.market_slug });
 
 const assignmentSelect = sql`
   a.id, a.wedding_id, a.role, a.status, a.compensation, a.coverage_hours, a.call_time::text, a.requirements, a.notes, a.travel_miles,
-  a.expires_at, a.accepted_at, a.prep_confirmed_at, a.requires_approval,
+  a.expires_at, a.accepted_at, a.prep_confirmed_at, a.requires_approval, a.offered_at,
   w.couple, w.wedding_date::text, w.start_time::text, w.venue_name, w.venue_address, w.reception_venue_name, w.guest_count, w.wedding_type, w.status as wedding_status,
-  m.city, m.state, p.name as package_name, b.service_slug`;
+  m.city, m.state, m.slug as market_slug, w.venue_lat, w.venue_lng, p.name as package_name, b.service_slug`;
 const assignmentJoins = sql`
   from wedding_assignments a
   join weddings w on w.id = a.wedding_id
@@ -77,8 +86,14 @@ export async function weddingForMember(memberId: string, weddingId: string) {
     // Team only sees what they need: names, planner, VIP notes. No client email/phone/payment info.
     sql`select c.partner_one, c.partner_two from weddings w join clients c on c.id = w.client_id where w.id = ${weddingId}`,
   ]);
-  const [w] = await sql`select ceremony_location, reception_location, reception_venue_name, reception_venue_address, special_requests, notes from weddings where id = ${weddingId}`;
-  return { assignment, wedding: w, timeline, team, documents, questionnaire: questionnaire[0] ?? null, uploads, conversationId: conversation[0]?.id ?? null, client: client[0] ?? null };
+  const [[w], [cancellation], [contract]] = await Promise.all([
+    sql`select ceremony_location, reception_location, reception_venue_name, reception_venue_address, special_requests, notes from weddings where id = ${weddingId}`,
+    sql`select id, reason, late, days_before, status, requested_at, decided_at, decision_note from assignment_cancellations
+        where assignment_id = ${assignment.id} and team_member_id = ${memberId} order by requested_at desc limit 1`,
+    sql`select id, signed_at, template_version from assignment_contracts where assignment_id = ${assignment.id} and team_member_id = ${memberId} and status = 'active' order by signed_at desc limit 1`,
+  ]);
+  return { assignment, wedding: w, timeline, team, documents, questionnaire: questionnaire[0] ?? null, uploads, conversationId: conversation[0]?.id ?? null, client: client[0] ?? null,
+    cancellation: cancellation ?? null, contract: contract ?? null };
 }
 
 export async function confirmPrep(memberId: string, assignmentId: string) {
@@ -87,7 +102,10 @@ export async function confirmPrep(memberId: string, assignmentId: string) {
 }
 
 /* ───────────── Open weddings marketplace ───────────── */
-export type Opportunity = AssignmentRow & { view_status: "available" | "pending" | "accepted" | "expired" | "filled" | "declined"; conflict: boolean; calendar: string | null; hourly: number; eligible: boolean; team: { role: string; name: string | null }[] };
+export type Opportunity = AssignmentRow & {
+  view_status: "available" | "offered" | "pending" | "accepted" | "expired" | "filled" | "declined"; conflict: boolean; calendar: string | null; hourly: number; eligible: boolean;
+  team: { role: string; name: string | null }[]; distance: Distance | null; mileage: number;
+};
 
 export async function opportunities(member: Member) {
   const roles = ROLE_PREFIX(member.discipline);
@@ -102,53 +120,108 @@ export async function opportunities(member: Member) {
          where x.wedding_id = w.id and x.id <> a.id and x.status in ('accepted','pending','filled')) as team
     ${assignmentJoins}
     where w.status <> 'cancelled'
-      and (a.status in ('open','expired','filled') or (a.team_member_id = ${member.id} and a.status in ('pending','accepted') and a.accepted_at > now() - interval '30 days') or (a.team_member_id = ${member.id} and a.status = 'pending'))
+      and (a.status in ('open','expired','filled') or (a.team_member_id = ${member.id} and a.status in ('pending','accepted') and a.accepted_at > now() - interval '30 days') or (a.team_member_id = ${member.id} and a.status in ('pending','offered')))
       and w.wedding_date >= current_date - 3
     order by w.wedding_date asc`;
   return rows.map((r) => {
     const expired = r.status === "expired" || (r.status === "open" && r.expires_at && new Date(r.expires_at) < new Date());
     const view_status: Opportunity["view_status"] =
-      r.mine && r.status === "pending" ? "pending"
+      r.mine && r.status === "offered" ? "offered"
+      : r.mine && r.status === "pending" ? "pending"
       : r.mine && r.status === "accepted" ? "accepted"
       : r.status === "filled" ? "filled"
       : expired ? "expired"
       : r.declined ? "declined"
       : "available";
-    return { ...r, team: (r as unknown as { team: Opportunity["team"] | null }).team ?? [], eligible: roles.includes(r.role), view_status, hourly: Math.round(r.compensation / r.coverage_hours) } as Opportunity;
+    const distance = distanceTo(originOf(member), venueOf(r));
+    // Once someone holds the slot, show the distance that was locked in for them
+    const miles = r.mine && r.travel_miles != null ? r.travel_miles : distance?.miles ?? null;
+    return {
+      ...r, team: (r as unknown as { team: Opportunity["team"] | null }).team ?? [], eligible: roles.includes(r.role), view_status, hourly: Math.round(r.compensation / r.coverage_hours),
+      distance: distance && miles != null ? { ...distance, miles } : distance, mileage: mileagePay(miles),
+    } as Opportunity;
   });
 }
 
-export async function acceptOpportunity(member: Member, assignmentId: string) {
+export type Signature = { name: string; agree: boolean; version: number; ip: string | null; userAgent: string | null };
+
+/**
+ * Accept an open wedding (→ pending until a coordinator approves) or an offer a coordinator made (→ accepted).
+ * Either way the member signs the contractor agreement first; the signed copy is stored with the wedding.
+ */
+export async function acceptOpportunity(member: Member, assignmentId: string, sig: Signature) {
+  if (member.status !== "active") return { ok: false as const, message: "Your account needs to be approved before you can take weddings." };
+  if (!sig.agree) return { ok: false as const, message: "Please confirm you agree to the terms." };
+  if (normName(sig.name) !== normName(member.full_name)) return { ok: false as const, message: `Type your full name exactly as it appears on your profile (${member.full_name}).`, field: "name" };
   return sql.begin(async (tx) => {
-    const [a] = await tx`
-      select a.*, w.wedding_date::text as date, w.couple, w.id as wid from wedding_assignments a join weddings w on w.id = a.wedding_id
+    const db = tx as unknown as typeof sql;
+    const [a] = await db`
+      select a.*, w.wedding_date::text as date, w.couple, w.id as wid, w.status as wstatus, w.venue_lat, w.venue_lng, m.slug as market_slug
+      from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
       where a.id = ${assignmentId} for update of a`;
-    if (!a) return { ok: false, message: "This wedding no longer exists." };
-    if (!ROLE_PREFIX(member.discipline).includes(a.role)) return { ok: false, message: "This role isn't open to your discipline." };
-    if (a.status !== "open") return { ok: false, message: a.status === "filled" || a.team_member_id ? "Sorry — someone else just took this wedding." : "This opportunity is no longer available." };
-    if (a.expires_at && new Date(a.expires_at) < new Date()) return { ok: false, message: "This opportunity has expired." };
-    const [conflict] = await tx`select w.couple from wedding_assignments x join weddings w on w.id = x.wedding_id
-      where x.team_member_id = ${member.id} and x.status in ('accepted','pending') and w.wedding_date = ${a.date}`;
-    if (conflict) return { ok: false, message: `You're already booked on this date (${conflict.couple}).` };
-    const [cal] = await tx`select status from availability where team_member_id = ${member.id} and date = ${a.date}`;
-    if (cal && cal.status !== "available") return { ok: false, message: "You're marked unavailable on this date. Update your calendar first." };
-    const status = a.requires_approval ? "pending" : "accepted";
-    await tx`update wedding_assignments set team_member_id = ${member.id}, status = ${status}, accepted_at = now() where id = ${assignmentId}`;
-    await tx`insert into availability (team_member_id, date, status, note) values (${member.id}, ${a.date}, 'available', ${"Booked: " + a.couple})
+    if (!a || a.wstatus === "cancelled") return { ok: false as const, message: "This wedding is no longer available." };
+    if (!ROLE_PREFIX(member.discipline).includes(a.role)) return { ok: false as const, message: "This role isn't open to your discipline." };
+    const offer = a.status === "offered" && a.team_member_id === member.id;
+    if (!offer) {
+      if (a.status !== "open") return { ok: false as const, message: a.status === "filled" || a.team_member_id ? "Sorry — someone else just took this wedding." : "This opportunity is no longer available." };
+      if (a.expires_at && new Date(a.expires_at) < new Date()) return { ok: false as const, message: "This opportunity has expired." };
+    }
+    if (a.date < new Date().toISOString().slice(0, 10)) return { ok: false as const, message: "This wedding has already taken place." };
+    const [conflict] = await db`select w.couple from wedding_assignments x join weddings w on w.id = x.wedding_id
+      where x.team_member_id = ${member.id} and x.status in ('accepted','pending') and w.wedding_date = ${a.date} and w.status <> 'cancelled' and x.id <> ${assignmentId}`;
+    if (conflict) return { ok: false as const, message: `You're already booked on this date (${conflict.couple}).` };
+    const [cal] = await db`select status from availability where team_member_id = ${member.id} and date = ${a.date}`;
+    if (cal && cal.status !== "available") return { ok: false as const, message: "You're marked unavailable on this date. Update your calendar first." };
+    const template = await activeTemplate(db);
+    if (template.version !== sig.version) return { ok: false as const, message: "Our terms were just updated. Please review the new version before signing.", stale: true };
+
+    const miles = distanceTo(originOf(member), venueOf(a as never))?.miles ?? null;
+    const ctx = await contractContext(db, assignmentId, member, miles);
+    if (!ctx) return { ok: false as const, message: "This wedding is no longer available." };
+    await voidContracts(db, { assignmentId }, "Superseded by a new signature");
+    await recordSignature(db, { assignmentId, teamMemberId: member.id, template, ctx, signerName: sig.name.trim().replace(/\s+/g, " "), signerEmail: member.email, ip: sig.ip, userAgent: sig.userAgent });
+
+    const status = offer ? "accepted" : "pending";
+    await db`update wedding_assignments set team_member_id = ${member.id}, status = ${status}, accepted_at = now(), travel_miles = ${miles},
+        approved_at = ${offer ? new Date() : null}, approved_by = ${offer ? a.offered_by : null}
+      where id = ${assignmentId}`;
+    await db`insert into availability (team_member_id, date, status, note) values (${member.id}, ${a.date}, 'available', ${"Booked: " + a.couple})
              on conflict (team_member_id, date) do update set status = 'available'`;
-    // Join any wedding team thread
-    const convs = await tx`select id from conversations where wedding_id = ${a.wid} and kind = 'wedding' and subject not like '%your wedding team%'`;
-    for (const c of convs) await tx`insert into conversation_participants (conversation_id, user_id) values (${c.id}, ${member.user_id}) on conflict do nothing`;
-    return { ok: true, status, couple: a.couple as string, weddingId: a.wid as string };
+    await db`delete from assignment_declines where assignment_id = ${assignmentId} and team_member_id = ${member.id}`;
+    if (offer) await joinWeddingThreads(db, a.wid, member.user_id);
+    return { ok: true as const, status, couple: a.couple as string, weddingId: a.wid as string, offeredBy: a.offered_by as string | null };
   }).then(async (r) => {
-    if (r.ok && "couple" in r) {
-      await notify(member.user_id, "booking", r.status === "pending" ? "Request sent" : "Wedding accepted",
-        r.status === "pending" ? `Your request for ${r.couple} is awaiting coordinator approval.` : `You're confirmed for ${r.couple}.`, `/team/weddings/${r.weddingId}`);
-      const coords = await sql`select id from users where role = 'coordinator'`;
-      for (const c of coords) await notify(c.id, "booking", `${member.full_name} ${r.status === "pending" ? "requested" : "accepted"} ${r.couple}`, null, "/admin");
+    if (r.ok) {
+      await notify(member.user_id, "booking", r.status === "pending" ? "Request sent" : "Wedding confirmed",
+        r.status === "pending" ? `Your request for ${r.couple} is awaiting coordinator approval. Your signed agreement is saved with the wedding.` : `You're confirmed for ${r.couple}.`,
+        r.status === "pending" ? `/team/open` : `/team/weddings/${r.weddingId}`);
+      for (const c of await sql`select id from users where role in ('coordinator','admin') and status = 'active'`)
+        await notify(c.id, "booking", r.status === "pending" ? `${member.full_name} requested ${r.couple}` : `${member.full_name} accepted your offer for ${r.couple}`,
+          r.status === "pending" ? "Contract signed — review and approve." : "Contract signed — they're confirmed.", `/admin/weddings/${r.weddingId}`);
     }
     return r;
   });
+}
+
+/** Add someone to a wedding's team message threads (not the couple's private thread). */
+export async function joinWeddingThreads(db: typeof sql, weddingId: string, userId: string) {
+  const convs = await db`select id from conversations where wedding_id = ${weddingId} and kind = 'wedding' and subject not like '%your wedding team%'`;
+  for (const c of convs) await db`insert into conversation_participants (conversation_id, user_id) values (${c.id}, ${userId}) on conflict do nothing`;
+}
+export async function leaveWeddingThreads(db: typeof sql, weddingId: string, userId: string) {
+  await db`delete from conversation_participants where user_id = ${userId} and conversation_id in (select id from conversations where wedding_id = ${weddingId} and kind = 'wedding')`;
+}
+
+/** Turn down an offer a coordinator made: the slot goes back to Open Weddings. */
+export async function declineOffer(member: Member, assignmentId: string, reason: string) {
+  const [a] = await sql`update wedding_assignments a set status = 'open', team_member_id = null, offered_at = null, offered_by = null
+    from weddings w where a.id = ${assignmentId} and w.id = a.wedding_id and a.team_member_id = ${member.id} and a.status = 'offered'
+    returning a.wedding_id, a.role, w.couple`;
+  if (!a) return false;
+  await sql`insert into assignment_declines (assignment_id, team_member_id, reason) values (${assignmentId}, ${member.id}, ${reason}) on conflict do nothing`;
+  for (const c of await sql`select id from users where role in ('coordinator','admin') and status = 'active'`)
+    await notify(c.id, "booking", `${member.full_name} declined ${a.couple}`, `${reason}. The slot is open on Open Weddings again.`, `/admin/weddings/${a.wedding_id}`);
+  return true;
 }
 
 export async function declineOpportunity(member: Member, assignmentId: string, reason?: string) {
@@ -158,7 +231,39 @@ export async function undoDecline(member: Member, assignmentId: string) {
   await sql`delete from assignment_declines where assignment_id = ${assignmentId} and team_member_id = ${member.id}`;
 }
 export async function withdrawRequest(member: Member, assignmentId: string) {
-  const r = await sql`update wedding_assignments set team_member_id = null, status = 'open', accepted_at = null where id = ${assignmentId} and team_member_id = ${member.id} and status = 'pending' returning id`;
+  return sql.begin(async (tx) => {
+    const db = tx as unknown as typeof sql;
+    const r = await db`update wedding_assignments set team_member_id = null, status = 'open', accepted_at = null, travel_miles = null
+      where id = ${assignmentId} and team_member_id = ${member.id} and status = 'pending' returning id`;
+    if (r.length) await voidContracts(db, { assignmentId, teamMemberId: member.id }, "Request withdrawn by the team member");
+    return r.length > 0;
+  });
+}
+
+/* ───────────── Cancellation requests (member stays on the wedding until a coordinator acts) ───────────── */
+export const LATE_CANCEL_DAYS = 14;
+
+export async function requestCancellation(member: Member, assignmentId: string, reason: string) {
+  const [a] = await sql`select a.id, a.role, a.wedding_id, w.couple, w.wedding_date::text as date, (w.wedding_date - current_date)::int as days
+    from wedding_assignments a join weddings w on w.id = a.wedding_id
+    where a.id = ${assignmentId} and a.team_member_id = ${member.id} and a.status = 'accepted' and w.status <> 'cancelled'`;
+  if (!a) return { ok: false as const, message: "Only confirmed weddings can be cancelled. For a pending request, withdraw it instead." };
+  if (a.days < 0) return { ok: false as const, message: "This wedding has already taken place." };
+  const late = a.days < LATE_CANCEL_DAYS;
+  try {
+    await sql`insert into assignment_cancellations (assignment_id, wedding_id, team_member_id, role, reason, late, days_before)
+      values (${assignmentId}, ${a.wedding_id}, ${member.id}, ${a.role}, ${reason}, ${late}, ${a.days})`;
+  } catch {
+    return { ok: false as const, message: "You already have a cancellation request for this wedding." };
+  }
+  for (const c of await sql`select id from users where role in ('coordinator','admin') and status = 'active'`)
+    await notify(c.id, "booking", `${late ? "Late cancellation" : "Cancellation request"}: ${a.couple}`, `${member.full_name} asked to be released (${a.days} days out). ${reason}`, `/admin/weddings/${a.wedding_id}`);
+  return { ok: true as const, late, days: a.days as number };
+}
+
+export async function withdrawCancellation(member: Member, assignmentId: string) {
+  const r = await sql`update assignment_cancellations set status = 'withdrawn', decided_at = now()
+    where assignment_id = ${assignmentId} and team_member_id = ${member.id} and status = 'pending' returning id`;
   return r.length > 0;
 }
 
@@ -263,7 +368,7 @@ export async function requestPayout(member: Member, assignmentId: string) {
   if (exists) return { ok: false, message: "Payment was already requested for this wedding." };
   const [{ n }] = await sql`select count(*)::int as n from uploads where assignment_id = ${assignmentId} and status <> 'failed'`;
   if (!n) return { ok: false, message: "Upload your files for this wedding before requesting payment." };
-  const mileage = a.travel_miles && a.travel_miles > 100 ? Math.round((a.travel_miles - 100) * 0.67) : 0;
+  const mileage = mileagePay(a.travel_miles);
   await sql`insert into payouts (team_member_id, assignment_id, amount, mileage, bonus, status, requested_at, method)
             values (${member.id}, ${assignmentId}, ${a.compensation}, ${mileage}, 50, 'pending', now(), ${member.payout_method ?? "Direct deposit"})`;
   await sql`update wedding_assignments set status = 'completed' where id = ${assignmentId}`;
@@ -304,6 +409,7 @@ export async function submitLicense(member: Member, input: { docType: string; la
 }
 
 /* ───────────── Overview / action items ───────────── */
+const fmtShort = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 export async function actionItems(member: Member) {
   const items: { id: string; title: string; detail: string; href: string; tone: "danger" | "warning" | "info" | "blush"; cta: string; assignmentId?: string }[] = [];
   const lic = await licenses(member.id);
@@ -317,6 +423,13 @@ export async function actionItems(member: Member) {
   }
   const [{ n }] = await sql`select count(*)::int as n from availability where team_member_id = ${member.id} and date between current_date and current_date + 45`;
   if (n < 4) items.push({ id: "avail", title: "Confirm your availability", detail: "Mark the next six weeks so coordinators can staff you.", href: "/team/availability", tone: "warning", cta: "Update" });
+  const offers = await sql`select a.id, a.role, w.couple, w.wedding_date::text from wedding_assignments a join weddings w on w.id = a.wedding_id
+    where a.team_member_id = ${member.id} and a.status = 'offered' and w.wedding_date >= current_date order by w.wedding_date`;
+  for (const o of offers) items.push({ id: "offer-" + o.id, title: `Offered: ${o.couple}`, detail: `A coordinator picked you for ${fmtShort(o.wedding_date)}. Review and sign to confirm.`, href: `/team/open?id=${o.id}`, tone: "blush", cta: "Review" });
+  const unsigned = await sql`select a.id, w.couple, w.id as wid from wedding_assignments a join weddings w on w.id = a.wedding_id
+    where a.team_member_id = ${member.id} and a.status = 'accepted' and w.wedding_date >= current_date and w.status <> 'cancelled'
+      and not exists (select 1 from assignment_contracts c where c.assignment_id = a.id and c.team_member_id = ${member.id} and c.status = 'active') order by w.wedding_date`;
+  for (const u of unsigned) items.push({ id: "sign-" + u.id, title: `Sign your agreement: ${u.couple}`, detail: "We now keep a signed contractor agreement for every wedding.", href: `/team/weddings/${u.wid}`, tone: "warning", cta: "Sign" });
   const prep = await sql`select a.id, w.couple, w.wedding_date::text, w.id as wid from wedding_assignments a join weddings w on w.id = a.wedding_id
     where a.team_member_id = ${member.id} and a.status = 'accepted' and a.prep_confirmed_at is null and w.wedding_date between current_date and current_date + 45 order by w.wedding_date`;
   for (const p of prep) items.push({ id: "prep-" + p.id, title: `Review timeline: ${p.couple}`, detail: "Confirm you've read the timeline, shot list and venue notes.", href: `/team/weddings/${p.wid}`, tone: "info", cta: "Review", assignmentId: p.id });
@@ -353,13 +466,47 @@ export function profileCompletion(m: Member, licenseCount = 1) {
   return { percent: Math.round((done / checks.length) * 100), missing: checks.filter((c) => !c[0]).map((c) => c[1]) };
 }
 
-export async function updateProfile(member: Member, p: Partial<{ full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null }>) {
+export async function updateProfile(member: Member, p: Partial<{ full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null; home_address: string; equipment: string }>) {
   await sql.begin(async (tx) => {
     await tx`update users set full_name = coalesce(${p.full_name ?? null}, full_name), phone = ${p.phone ?? member.phone}, avatar_url = ${p.avatar_url === undefined ? member.avatar_url : p.avatar_url} where id = ${member.user_id}`;
     await tx`update team_members set
       bio = ${p.bio ?? member.bio}, home_market_id = ${p.home_market_id ?? member.home_market_id}, service_radius = ${p.service_radius ?? member.service_radius},
       specialties = ${p.specialties ?? member.specialties}, years_experience = ${p.years_experience ?? member.years_experience}, languages = ${p.languages ?? member.languages},
-      portfolio_url = ${p.portfolio_url ?? member.portfolio_url}, instagram = ${p.instagram ?? member.instagram}, website = ${p.website ?? member.website}
+      portfolio_url = ${p.portfolio_url ?? member.portfolio_url}, instagram = ${p.instagram ?? member.instagram}, website = ${p.website ?? member.website},
+      home_address = ${p.home_address === undefined ? member.home_address : p.home_address || null}, equipment = ${p.equipment === undefined ? member.equipment : p.equipment || null}
       where id = ${member.id}`;
   });
+}
+
+/** Sign the agreement for a wedding you were confirmed on before contracts were required. */
+export async function signExisting(member: Member, assignmentId: string, sig: Signature) {
+  if (!sig.agree) return { ok: false as const, message: "Please confirm you agree to the terms." };
+  if (normName(sig.name) !== normName(member.full_name)) return { ok: false as const, message: `Type your full name exactly as it appears on your profile (${member.full_name}).` };
+  return sql.begin(async (tx) => {
+    const db = tx as unknown as typeof sql;
+    const [a] = await db`select a.id, a.travel_miles from wedding_assignments a where a.id = ${assignmentId} and a.team_member_id = ${member.id} and a.status in ('accepted','pending') for update`;
+    if (!a) return { ok: false as const, message: "This wedding isn't assigned to you." };
+    const [has] = await db`select 1 from assignment_contracts where assignment_id = ${assignmentId} and team_member_id = ${member.id} and status = 'active'`;
+    if (has) return { ok: false as const, message: "You've already signed the agreement for this wedding." };
+    const template = await activeTemplate(db);
+    if (template.version !== sig.version) return { ok: false as const, message: "Our terms were just updated. Please review the new version before signing.", stale: true };
+    const ctx = await contractContext(db, assignmentId, member, a.travel_miles);
+    if (!ctx) return { ok: false as const, message: "Wedding not found." };
+    await recordSignature(db, { assignmentId, teamMemberId: member.id, template, ctx, signerName: sig.name.trim().replace(/\s+/g, " "), signerEmail: member.email, ip: sig.ip, userAgent: sig.userAgent });
+    return { ok: true as const };
+  });
+}
+
+/** The agreement text a member is about to sign for a slot (filled in, not yet saved). */
+export async function contractPreview(member: Member, assignmentId: string) {
+  const [a] = await sql`select a.id, a.role, a.status, a.team_member_id, a.travel_miles, w.venue_lat, w.venue_lng, m.slug as market_slug
+    from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
+  if (!a || !ROLE_PREFIX(member.discipline).includes(a.role)) return null;
+  const visible = a.status === "open" || a.team_member_id === member.id;
+  if (!visible) return null;
+  const miles = a.team_member_id === member.id && a.travel_miles != null ? a.travel_miles : distanceTo(originOf(member), venueOf(a as never))?.miles ?? null;
+  const template = await activeTemplate();
+  const ctx = await contractContext(sql, assignmentId, member, miles);
+  if (!ctx) return null;
+  return { version: template.version, title: fillTemplate(template.title, ctx), body: fillTemplate(template.body, ctx) };
 }

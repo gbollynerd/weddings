@@ -1,12 +1,12 @@
 import Link from "next/link";
-import { currentMember } from "@/lib/services/me";
+import { requireActiveMember } from "@/lib/services/me";
 import { uploadableWeddings, listUploads } from "@/lib/services/uploads";
 import { storage } from "@/lib/storage";
 import { UploadCenter } from "./upload-center";
 import { LinkTabs } from "@/components/ui";
 
 export async function UploadPage({ kind, weddingParam }: { kind: "photo" | "video"; weddingParam?: string }) {
-  const { user, member } = await currentMember();
+  const { user, member } = await requireActiveMember();
   const weddings = await uploadableWeddings(member.id);
   const selected = weddings.find((w) => w.id === weddingParam)?.id ?? weddings.find((w) => new Date(w.wedding_date) <= new Date())?.id ?? weddings[0]?.id ?? null;
   const files = selected ? await listUploads(user.id, kind, selected) : [];

@@ -440,3 +440,100 @@ alter table wedding_change_requests enable row level security;
 -- ceremony_location / reception_location hold the room or area within each venue.
 alter table weddings add column if not exists reception_venue_name text;
 alter table weddings add column if not exists reception_venue_address text;
+
+-- ───────────────────────── Accounts: suspension + team applications ─────────────────────────
+alter table users add column if not exists status text not null default 'active';
+alter table users drop constraint if exists users_status_check;
+alter table users add constraint users_status_check check (status in ('active','suspended'));
+alter table users add column if not exists suspended_reason text;
+-- team_members.status: applicant → active (approved) | rejected; inactive = removed from the team
+alter table team_members drop constraint if exists team_members_status_check;
+alter table team_members add constraint team_members_status_check check (status in ('applicant','active','rejected','inactive'));
+alter table team_members add column if not exists home_address text;
+alter table team_members add column if not exists equipment text;
+alter table team_members add column if not exists applied_at timestamptz;
+alter table team_members add column if not exists decided_at timestamptz;
+alter table team_members add column if not exists decided_by uuid references users(id) on delete set null;
+alter table team_members add column if not exists decision_note text;
+
+-- ───────────────────────── Distance: geocoded venues ─────────────────────────
+alter table weddings add column if not exists venue_lat double precision;
+alter table weddings add column if not exists venue_lng double precision;
+alter table weddings add column if not exists reception_lat double precision;
+alter table weddings add column if not exists reception_lng double precision;
+alter table weddings add column if not exists geocoded_at timestamptz;
+
+-- ───────────────────────── Team slots: offers, approvals, cancellations ─────────────────────────
+-- offered = a coordinator picked this person; they sign the contract to accept
+alter table wedding_assignments drop constraint if exists wedding_assignments_status_check;
+alter table wedding_assignments add constraint wedding_assignments_status_check check (status in ('open','offered','pending','accepted','filled','expired','completed','cancelled'));
+alter table wedding_assignments add column if not exists offered_at timestamptz;
+alter table wedding_assignments add column if not exists offered_by uuid references users(id) on delete set null;
+alter table wedding_assignments add column if not exists approved_at timestamptz;
+alter table wedding_assignments add column if not exists approved_by uuid references users(id) on delete set null;
+
+create table if not exists assignment_cancellations (
+  id                     uuid primary key default gen_random_uuid(),
+  assignment_id          uuid references wedding_assignments(id) on delete set null,
+  wedding_id             uuid not null references weddings(id) on delete cascade,
+  team_member_id         uuid not null references team_members(id) on delete cascade,
+  role                   text not null,
+  reason                 text not null,
+  status                 text not null default 'pending' check (status in ('pending','reassigned','reopened','kept','withdrawn')),
+  late                   boolean not null default false,     -- requested inside 14 days of the wedding
+  days_before            int not null,
+  requested_at           timestamptz not null default now(),
+  decided_by             uuid references users(id) on delete set null,
+  decided_at             timestamptz,
+  decision_note          text,
+  replacement_member_id  uuid references team_members(id) on delete set null
+);
+create index if not exists cancellations_member_idx on assignment_cancellations(team_member_id, requested_at desc);
+create unique index if not exists cancellations_one_pending on assignment_cancellations(assignment_id) where status = 'pending';
+alter table assignment_cancellations enable row level security;
+
+-- ───────────────────────── Contractor agreements ─────────────────────────
+create table if not exists contract_templates (
+  id          uuid primary key default gen_random_uuid(),
+  version     int not null unique,
+  title       text not null,
+  body        text not null,          -- markdown-ish text with {{placeholders}}
+  change_note text,
+  created_by  uuid references users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+alter table contract_templates enable row level security;
+
+-- One row per signature. The rendered text is frozen at signing so later template edits never change it.
+create table if not exists assignment_contracts (
+  id               uuid primary key default gen_random_uuid(),
+  assignment_id    uuid references wedding_assignments(id) on delete set null,
+  wedding_id       uuid not null references weddings(id) on delete cascade,
+  team_member_id   uuid not null references team_members(id) on delete cascade,
+  template_id      uuid references contract_templates(id) on delete set null,
+  template_version int not null,
+  title            text not null,
+  body             text not null,
+  body_sha256      text not null,
+  role             text not null,
+  compensation     int not null,
+  wedding_date     date not null,
+  signer_name      text not null,
+  signer_email     text not null,
+  signed_at        timestamptz not null default now(),
+  ip               text,
+  user_agent       text,
+  status           text not null default 'active' check (status in ('active','void')),
+  voided_at        timestamptz,
+  void_reason      text
+);
+create index if not exists contracts_wedding_idx on assignment_contracts(wedding_id, signed_at desc);
+create index if not exists contracts_member_idx on assignment_contracts(team_member_id, signed_at desc);
+create index if not exists contracts_assignment_idx on assignment_contracts(assignment_id);
+alter table assignment_contracts enable row level security;
+
+-- ───────────────────────── Client requests: venue + details ─────────────────────────
+alter table wedding_change_requests drop constraint if exists wedding_change_requests_kind_check;
+alter table wedding_change_requests add constraint wedding_change_requests_kind_check check (kind in ('package','date','venue','details'));
+alter table wedding_change_requests add column if not exists payload jsonb;
+alter table wedding_change_requests add column if not exists before jsonb;

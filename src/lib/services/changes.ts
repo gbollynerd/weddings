@@ -87,7 +87,7 @@ export async function syncTeamSlots(db: Tx, weddingId: string, weddingDate: stri
   const hours = coverageHours(pkg.hours, addons);
   const need = slotsFor(pkg, addons.map((a) => a.slug));
   const active = await db`select a.id, a.role, a.status, a.coverage_hours, tm.user_id from wedding_assignments a left join team_members tm on tm.id = a.team_member_id
-    where a.wedding_id = ${weddingId} and a.status in ('open','pending','accepted')`;
+    where a.wedding_id = ${weddingId} and a.status in ('open','offered','pending','accepted')`;
   const [{ start }] = await db`select start_time::text as start from weddings where id = ${weddingId}`;
   const [h, m] = String(start).split(":").map(Number);
   const at = (dm: number) => { const t = h * 60 + m + dm; return `${String(Math.floor(t / 60) % 24).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
@@ -97,6 +97,8 @@ export async function syncTeamSlots(db: Tx, weddingId: string, weddingDate: stri
   for (const a of active) {
     if (!need.includes(a.role)) {
       await db`update wedding_assignments set status = 'cancelled' where id = ${a.id}`;
+      await db`update assignment_contracts set status = 'void', voided_at = now(), void_reason = 'Role removed when the couple changed packages' where assignment_id = ${a.id} and status = 'active'`;
+      await db`update assignment_cancellations set status = 'withdrawn', decided_at = now(), decision_note = 'Role removed when the couple changed packages' where assignment_id = ${a.id} and status = 'pending'`;
       if (a.user_id) released.push(a);
     } else if (a.coverage_hours !== hours) {
       await db`update wedding_assignments set coverage_hours = ${hours}, compensation = ${compensationFor(a.role, hours)} where id = ${a.id}`;
@@ -115,7 +117,7 @@ export async function syncTeamSlots(db: Tx, weddingId: string, weddingDate: stri
 /** Change requests for a wedding, newest first, with package names resolved. */
 export async function changeRequestsFor(weddingId: string) {
   return sql`select r.id, r.kind, r.status, r.note, r.decision_note, r.created_at, r.decided_at, r.from_date::text, r.to_date::text,
-      r.total_before, r.total_after, r.removed_addons, fp.name as from_package, tp.name as to_package
+      r.total_before, r.total_after, r.removed_addons, r.payload, r.before, fp.name as from_package, tp.name as to_package
     from wedding_change_requests r left join packages fp on fp.id = r.from_package_id left join packages tp on tp.id = r.to_package_id
     where r.wedding_id = ${weddingId} order by r.created_at desc limit 10`;
 }

@@ -1,21 +1,24 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { MapPin, Church, PartyPopper, Package as PackageIcon, CalendarClock, Hourglass, X, CheckCircle2, XCircle, Info, Camera, Video, Sparkles, AlertTriangle } from "lucide-react";
-import { Button, Field, Input, Textarea, Badge, Alert, Checkbox } from "@/components/ui";
+import { MapPin, Church, PartyPopper, Package as PackageIcon, CalendarClock, Hourglass, X, CheckCircle2, XCircle, Info, Camera, Video, Sparkles, AlertTriangle, SlidersHorizontal } from "lucide-react";
+import { Button, Field, Input, Textarea, Badge, Alert, Checkbox, Select } from "@/components/ui";
 import { Modal, useAction } from "@/components/ui/interactive";
 import { AddressInput, needsConfirmation, type AddressStatus } from "@/components/ui/address-input";
-import { updateVenueAction, requestPackageChangeAction, requestDateChangeAction, cancelChangeRequestAction } from "@/lib/actions/changes";
+import { requestVenueChangeAction, requestDetailsChangeAction, requestPackageChangeAction, requestDateChangeAction, cancelChangeRequestAction } from "@/lib/actions/changes";
+import { WEDDING_TYPES } from "@/content/wedding-types";
 import { checkAvailabilityAction } from "@/lib/actions/booking";
 import { money } from "@/lib/pricing";
-import { fmtDate, fmtLong, cn } from "@/lib/utils";
+import { fmtDate, fmtLong, fmtTime, cn } from "@/lib/utils";
+import { weddingPlaces, placeLine } from "@/lib/venues";
 
 export type PkgOption = { slug: string; name: string; tagline: string; service_slug: string; hours: number; price: number; popular: boolean };
 export type BookedAddon = { name: string; applies_to: string[]; line: number };
 export type ChangeReq = {
-  id: string; kind: "package" | "date"; status: "pending" | "approved" | "declined" | "cancelled"; note: string | null; decision_note: string | null;
+  id: string; kind: "package" | "date" | "venue" | "details"; status: "pending" | "approved" | "declined" | "cancelled"; note: string | null; decision_note: string | null;
   created_at: string; decided_at: string | null; from_date: string | null; to_date: string | null; from_package: string | null; to_package: string | null;
   total_before: number | null; total_after: number | null; removed_addons: string[];
+  payload: Record<string, unknown> | null; before: Record<string, unknown> | null;
 };
 export type VenueForm = {
   ceremonyVenue: string; ceremonyAddress: string; ceremonyArea: string;
@@ -25,6 +28,7 @@ export type ChangeProps = {
   weddingId: string; weddingDate: string; daysToGo: number; market: string; service: "photo" | "video" | "both";
   packageSlug: string; packageName: string; packagePrice: number; total: number; balance: number;
   venue: VenueForm; venueOptions: { name: string; address: string }[];
+  guestCount: number | null; weddingType: string | null; startTime: string;
   packages: PkgOption[]; addons: BookedAddon[]; requests: ChangeReq[];
 };
 
@@ -33,24 +37,26 @@ const signed = (n: number) => (n === 0 ? "No change" : `${n > 0 ? "+" : "−"}${
 
 /** Buttons that open the three change flows. */
 export function ChangeActions(p: ChangeProps) {
-  const [open, setOpen] = React.useState<null | "venue" | "package" | "date">(null);
+  const [open, setOpen] = React.useState<null | "venue" | "details" | "package" | "date">(null);
   const pending = (k: string) => p.requests.some((r) => r.kind === k && r.status === "pending");
   const close = React.useCallback(() => setOpen(null), []);
   return (
     <>
       <div className="mt-6 flex flex-col gap-2 border-t border-line pt-5 sm:flex-row sm:flex-wrap">
-        <Button variant="outline" size="sm" icon={MapPin} onClick={() => setOpen("venue")}>Edit venues</Button>
+        <Button variant="outline" size="sm" icon={MapPin} onClick={() => setOpen("venue")} disabled={pending("venue")} title={pending("venue") ? "A venue change is already waiting for review" : undefined}>Change venues</Button>
+        <Button variant="outline" size="sm" icon={SlidersHorizontal} onClick={() => setOpen("details")} disabled={pending("details")} title={pending("details") ? "A details change is already waiting for review" : undefined}>Guests, style &amp; time</Button>
         <Button variant="outline" size="sm" icon={PackageIcon} onClick={() => setOpen("package")} disabled={pending("package")} title={pending("package") ? "A package change is already waiting for review" : undefined}>Change package</Button>
         <Button variant="outline" size="sm" icon={CalendarClock} onClick={() => setOpen("date")} disabled={pending("date")} title={pending("date") ? "A date change is already waiting for review" : undefined}>Change date</Button>
       </div>
       <VenueModal open={open === "venue"} onClose={close} {...p} />
+      <DetailsModal open={open === "details"} onClose={close} {...p} />
       <PackageModal open={open === "package"} onClose={close} {...p} />
       <DateModal open={open === "date"} onClose={close} {...p} />
     </>
   );
 }
 
-/* ───────────── Venues (apply immediately) ───────────── */
+/* ───────────── Venues (request) ───────────── */
 function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangeProps & { open: boolean; onClose: () => void }) {
   const router = useRouter();
   const { run, pending } = useAction();
@@ -60,7 +66,8 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
   const [addr, setAddr] = React.useState<{ c: AddressStatus; r: AddressStatus }>({ c: "unchanged", r: "unchanged" });
   const [trusted, setTrusted] = React.useState({ c: false, r: false });
   const [confirmUnverified, setConfirmUnverified] = React.useState(false);
-  React.useEffect(() => { if (open) { setF(venue); setErrors({}); setTrusted({ c: false, r: false }); setConfirmUnverified(false); } }, [open, venue]);
+  const [note, setNote] = React.useState("");
+  React.useEffect(() => { if (open) { setF(venue); setErrors({}); setTrusted({ c: false, r: false }); setConfirmUnverified(false); setNote(""); } }, [open, venue]);
   const onC = React.useCallback((st: AddressStatus) => { setAddr((a) => ({ ...a, c: st })); setConfirmUnverified(false); }, []);
   const onR = React.useCallback((st: AddressStatus) => { setAddr((a) => ({ ...a, r: st })); setConfirmUnverified(false); }, []);
   const unverified = [
@@ -95,7 +102,7 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
     e?.preventDefault();
     if (unverified.length && !confirmUnverified) { setConfirmUnverified(true); return; }
     run(async () => {
-      const r = await updateVenueAction(weddingId, f);
+      const r = await requestVenueChangeAction(weddingId, { ...f, note });
       if (!r.ok && r.fieldErrors) setErrors(r.fieldErrors);
       return r;
     }, { onSuccess: () => { onClose(); router.refresh(); } });
@@ -104,8 +111,8 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
   const heading = (Icon: typeof Church, text: string) => <p className="flex items-center gap-2 text-sm font-semibold text-ink"><span className="grid size-7 place-items-center rounded-lg bg-blush-50 text-blush-600"><Icon className="size-4" /></span>{text}</p>;
   return (
     <Modal open={open} onClose={onClose} size="lg" icon={<span className="grid size-10 place-items-center rounded-2xl bg-blush-50 text-blush-600"><MapPin className="size-5" /></span>}
-      title="Edit venues" description="Where your ceremony and reception take place. Changes save right away and your team is notified."
-      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save()} loading={pending}>{confirmUnverified && unverified.length ? "Save anyway" : "Save changes"}</Button></>}>
+      title="Change venues" description="Where your ceremony and reception take place. Your coordinator confirms the change, then your team is updated."
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save()} loading={pending}>{confirmUnverified && unverified.length ? "Send anyway" : "Send request"}</Button></>}>
       <form onSubmit={save} className="space-y-4">
         <datalist id="cv-venues">{venueOptions.map((o) => <option key={o.name} value={o.name} />)}</datalist>
 
@@ -151,10 +158,64 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
         {confirmUnverified && unverified.length > 0 && (
           <Alert tone="warning" icon={AlertTriangle} title={unverified.length > 1 ? "We couldn't verify these addresses" : "We couldn't verify this address"}>
             <ul className="mt-1 space-y-0.5">{unverified.map((u) => <li key={u}>{u}</li>)}</ul>
-            <p className="mt-1">Your team uses it for directions. Pick a suggestion or check it — or choose <b>Save anyway</b> if it&apos;s correct.</p>
+            <p className="mt-1">Your team uses it for directions. Pick a suggestion or check it — or choose <b>Send anyway</b> if it&apos;s correct.</p>
           </Alert>
         )}
-        <p className="flex items-start gap-2 rounded-2xl bg-canvas p-3 text-[12px] text-muted"><Info className="mt-0.5 size-3.5 shrink-0" />Moving outside your booked city? Message your coordinator first — travel may affect pricing.</p>
+        <Field label="Note for your coordinator" hint="Optional" htmlFor="cv-note">
+          <Textarea id="cv-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. The church asked us to move the ceremony to the chapel" className="min-h-[64px]" maxLength={1000} />
+        </Field>
+        <p className="flex items-start gap-2 rounded-2xl bg-canvas p-3 text-[12px] text-muted"><Info className="mt-0.5 size-3.5 shrink-0" />Moving outside your booked city? Mention it in the note — travel may affect pricing.</p>
+        <button type="submit" className="hidden" />
+      </form>
+    </Modal>
+  );
+}
+
+/* ───────────── Guests, style & start time (request) ───────────── */
+function DetailsModal({ open, onClose, weddingId, guestCount, weddingType, startTime }: ChangeProps & { open: boolean; onClose: () => void }) {
+  const router = useRouter();
+  const { run, pending } = useAction();
+  const init = React.useMemo(() => ({ guestCount: guestCount ? String(guestCount) : "", weddingType: weddingType ?? "", startTime: startTime.slice(0, 5) }), [guestCount, weddingType, startTime]);
+  const [f, setF] = React.useState(init);
+  const [note, setNote] = React.useState("");
+  const [errors, setErrors] = React.useState<Record<string, string>>({});
+  React.useEffect(() => { if (open) { setF(init); setNote(""); setErrors({}); } }, [open, init]);
+  const types = weddingType && !(WEDDING_TYPES as readonly string[]).includes(weddingType) ? [weddingType, ...WEDDING_TYPES] : [...WEDDING_TYPES];
+  const changed = f.guestCount !== init.guestCount || f.weddingType !== init.weddingType || f.startTime !== init.startTime;
+  const shiftMins = (() => { const [a, b] = f.startTime.split(":").map(Number); const [c, d] = init.startTime.split(":").map(Number); return a * 60 + b - (c * 60 + d); })();
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { setF((x) => ({ ...x, [k]: e.target.value })); setErrors((x) => ({ ...x, [k]: "" })); };
+  const send = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    run(async () => {
+      const r = await requestDetailsChangeAction(weddingId, { guestCount: f.guestCount, weddingType: f.weddingType, startTime: f.startTime, note });
+      if (!r.ok && r.fieldErrors) setErrors(r.fieldErrors);
+      return r;
+    }, { onSuccess: () => { onClose(); router.refresh(); } });
+  };
+  return (
+    <Modal open={open} onClose={onClose} size="md" icon={<span className="grid size-10 place-items-center rounded-2xl bg-blush-50 text-blush-600"><SlidersHorizontal className="size-5" /></span>}
+      title="Guests, style & start time" description="Your coordinator confirms changes before they're shared with your team."
+      footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => send()} loading={pending} disabled={!changed}>Send request</Button></>}>
+      <form onSubmit={send} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Guest count" required error={errors.guestCount} htmlFor="cd-guests">
+            <Input id="cd-guests" type="number" inputMode="numeric" min={2} max={2000} value={f.guestCount} onChange={set("guestCount")} aria-invalid={!!errors.guestCount} />
+          </Field>
+          <Field label="Coverage starts" required error={errors.startTime} htmlFor="cd-start" hint={init.startTime ? `Currently ${fmtTime(init.startTime)}` : undefined}>
+            <Input id="cd-start" type="time" value={f.startTime} onChange={set("startTime")} aria-invalid={!!errors.startTime} />
+          </Field>
+        </div>
+        <Field label="Wedding style" required error={errors.weddingType} htmlFor="cd-style">
+          <Select id="cd-style" value={f.weddingType} onChange={set("weddingType")} aria-invalid={!!errors.weddingType}>
+            <option value="">Select…</option>{types.map((t) => <option key={t}>{t}</option>)}
+          </Select>
+        </Field>
+        {shiftMins !== 0 && f.startTime && (
+          <Alert tone="info" icon={Info}>Your whole timeline and your team&apos;s call times move {Math.abs(shiftMins) >= 60 ? `${Math.floor(Math.abs(shiftMins) / 60)} h${Math.abs(shiftMins) % 60 ? ` ${Math.abs(shiftMins) % 60} min` : ""}` : `${Math.abs(shiftMins)} min`} {shiftMins > 0 ? "later" : "earlier"} once approved.</Alert>
+        )}
+        <Field label="Note for your coordinator" hint="Optional" htmlFor="cd-dnote">
+          <Textarea id="cd-dnote" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Anything we should know?" className="min-h-[64px]" maxLength={1000} />
+        </Field>
         <button type="submit" className="hidden" />
       </form>
     </Modal>
@@ -300,9 +361,9 @@ export function ChangeRequestList({ requests }: { requests: ChangeReq[] }) {
   return (
     <div className="space-y-3">
       {recent.map((r) => {
-        const what = r.kind === "package" ? `${r.from_package} → ${r.to_package}` : `${fmtDate(r.from_date!)} → ${fmtDate(r.to_date!)}`;
+        const what = describeRequest(r);
         const diff = r.total_after != null && r.total_before != null ? r.total_after - r.total_before : null;
-        const label = r.kind === "package" ? "Package change" : "Date change";
+        const label = ({ package: "Package change", date: "Date change", venue: "Venue change", details: "Details change" } as const)[r.kind];
         if (r.status === "pending")
           return (
             <Alert key={r.id} tone="blush" icon={Hourglass} title={`${label} requested · awaiting your coordinator`}
@@ -318,4 +379,20 @@ export function ChangeRequestList({ requests }: { requests: ChangeReq[] }) {
       })}
     </div>
   );
+}
+
+/** One-line summary of what a request changes (shared with the coordinator view). */
+export function describeRequest(r: Pick<ChangeReq, "kind" | "from_package" | "to_package" | "from_date" | "to_date" | "payload" | "before">) {
+  if (r.kind === "package") return `${r.from_package} → ${r.to_package}`;
+  if (r.kind === "date") return `${fmtDate(r.from_date!)} → ${fmtDate(r.to_date!)}`;
+  const p = (r.payload ?? {}) as Record<string, string | number | null>, b = (r.before ?? {}) as Record<string, string | number | null>;
+  if (r.kind === "venue") {
+    const pl = weddingPlaces(p as never);
+    return pl.same ? `Ceremony & reception at ${placeLine(pl.ceremony)}` : `Ceremony at ${placeLine(pl.ceremony)} · reception at ${placeLine(pl.reception)}`;
+  }
+  const out: string[] = [];
+  if (p.guest_count != null) out.push(`${b.guest_count ?? "—"} → ${p.guest_count} guests`);
+  if (p.wedding_type != null) out.push(`Style: ${p.wedding_type}`);
+  if (p.start_time != null) out.push(`Start ${b.start_time ? fmtTime(String(b.start_time)) : "—"} → ${fmtTime(String(p.start_time))}`);
+  return out.join(" · ");
 }

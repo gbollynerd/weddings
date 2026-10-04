@@ -17,7 +17,7 @@ export function SiteFooter() {
         {[
           ["Services", [["Photography", "/book?service=photo"], ["Videography", "/book?service=video"], ["Photo + Video", "/book?service=both"], ["Pricing", "/#pricing"]]],
           ["Company", [["How it works", "/#how"], ["Locations", "/#locations"], ["Portfolio", "/#portfolio"], ["FAQ", "/#faq"]]],
-          ["Accounts", [["Client login", "/login"], ["Create account", "/signup"], ["Team login", "/login?next=/team"], ["Book now", "/book"]]],
+          ["Accounts", [["Client login", "/login"], ["Create account", "/signup"], ["Team login", "/login?next=/team"], ["Join our team", "/join"], ["Book now", "/book"]]],
         ].map(([title, links]) => (
           <div key={title as string}>
             <p className="text-sm font-semibold text-white">{title as string}</p>

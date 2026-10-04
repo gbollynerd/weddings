@@ -40,7 +40,7 @@ export const getSession = cache(async (): Promise<SessionUser | null> => {
     const rows = await sql<SessionUser[]>`
       select u.id, u.email, u.role, u.full_name, u.phone, u.avatar_url, s.id as session_id
       from sessions s join users u on u.id = s.user_id
-      where s.id = ${payload.sid as string} and s.revoked_at is null`;
+      where s.id = ${payload.sid as string} and s.revoked_at is null and u.status = 'active'`;
     if (!rows[0]) return null;
     // keep "last active" fresh without writing on every request
     sql`update sessions set last_seen = now() where id = ${rows[0].session_id} and last_seen < now() - interval '5 minutes'`.catch(() => {});
@@ -71,10 +71,17 @@ export async function requirePermission(permission: string) {
 }
 
 export async function verifyPassword(email: string, password: string) {
-  const [u] = await sql`select id, password_hash, role from users where lower(email) = lower(${email})`;
+  const [u] = await sql`select id, password_hash, role, status from users where lower(email) = lower(${email})`;
   if (!u) return null;
   const ok = await bcrypt.compare(password, u.password_hash);
-  return ok ? (u as { id: string; role: Role }) : null;
+  return ok ? ({ id: u.id, role: u.role, status: u.status } as { id: string; role: Role; status: "active" | "suspended" }) : null;
+}
+
+export const SUSPENDED_MESSAGE = "This account has been suspended. Contact your coordinator if you think this is a mistake.";
+
+/** Sign a user out everywhere (suspension, password reset). */
+export async function revokeAllSessions(userId: string) {
+  await sql`update sessions set revoked_at = now() where user_id = ${userId} and revoked_at is null`;
 }
 
 export const hashPassword = (p: string) => bcrypt.hash(p, 10);

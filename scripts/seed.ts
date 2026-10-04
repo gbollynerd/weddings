@@ -111,6 +111,14 @@ async function main() {
               ${"https://portfolio.example.com/" + t.email.split("@")[0]}, ${"@" + t.email.split("@")[0] + ".films"}, null, ${t.rating}, ${String(4000 + team.indexOf(t) * 137).slice(-4)}) returning id`;
     tm[t.email.split("@")[0]] = { id: r.id, user: uid };
   }
+  // A photographer who applied through /join and is waiting for review
+  {
+    const uid = await user("nina@visualweddings.test", "photographer", "Nina Okafor", "(704) 555-0188");
+    await sql`insert into team_members (user_id, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, status, applied_at, specialties)
+      values (${uid}, 'photo', ${"Documentary wedding photographer — 40+ weddings as a second shooter and 12 as a lead. I love candid family moments and dance floors."},
+              ${marketId["charlotte-nc"]}, 4, 'https://portfolio.example.com/nina', '@nina.okafor.photo', 'Canon R6 II ×2, 24-70 f/2.8, 70-200 f/2.8, 35 f/1.4, Godox flashes',
+              '1200 East Blvd, Charlotte, NC 28203', 'applicant', now() - interval '2 days', ${["Documentary", "Candid"]})`;
+  }
 
   // ── Weddings
   type W = {

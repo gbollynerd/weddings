@@ -11,6 +11,7 @@ import { Logo } from "@/components/brand/logo";
 import { Button, Field, Input, Select, Textarea, Alert, Badge, Checkbox } from "@/components/ui";
 import { Modal, Tabs, useToast } from "@/components/ui/interactive";
 import { AddressInput } from "@/components/ui/address-input";
+import { WEDDING_TYPES } from "@/content/wedding-types";
 import { checkAvailabilityAction, createBookingAction } from "@/lib/actions/booking";
 import { signupClient, loginInline, logoutAction } from "@/lib/actions/auth";
 import { quote, marketPrice, money, DEPOSIT_RATE } from "@/lib/pricing";
@@ -276,7 +277,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
                 <Field label="Guest count" error={errors.guests} required><Input type="number" min={2} value={d.details.guests} onChange={(e) => setDetail("guests", e.target.value)} aria-invalid={!!errors.guests} /></Field>
                 <Field label="Wedding type" error={errors.weddingType} required>
                   <Select value={d.details.weddingType} onChange={(e) => setDetail("weddingType", e.target.value)} aria-invalid={!!errors.weddingType}>
-                    <option value="">Select…</option>{["Traditional ceremony & reception", "Garden / outdoor", "Religious ceremony", "Cultural / multi-day", "Black tie", "Rustic / barn", "Elopement / micro wedding", "Destination"].map((t) => <option key={t}>{t}</option>)}
+                    <option value="">Select…</option>{WEDDING_TYPES.map((t) => <option key={t}>{t}</option>)}
                   </Select>
                 </Field>
                 <Field label="Approximate start time" hint="When you'd like coverage to begin"><Input type="time" value={d.details.startTime} onChange={(e) => setDetail("startTime", e.target.value)} /></Field>

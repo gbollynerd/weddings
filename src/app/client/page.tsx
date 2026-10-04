@@ -48,6 +48,7 @@ export default async function ClientHome() {
       receptionSame: places.same, receptionVenue: places.same ? "" : places.reception.venue, receptionAddress: places.same ? "" : places.reception.address ?? "", receptionArea: places.reception.area ?? "",
     },
     venueOptions: venues.map((v) => ({ name: v.name, address: v.address })),
+    guestCount: b.guest_count ?? null, weddingType: b.wedding_type ?? null, startTime: String(b.start_time ?? "14:00"),
     packages: pkgs.map((x) => ({ slug: x.slug, name: x.name, tagline: x.tagline ?? "", service_slug: x.service_slug, hours: x.hours, popular: x.popular, price: marketPrice(x.base_price, b.price_multiplier) })),
     addons: b.addons.map((a) => ({ name: a.name, applies_to: a.applies_to, line: a.unit_price * Math.max(1, a.quantity) })),
     requests: b.changeRequests.map((r) => ({ ...r, created_at: new Date(r.created_at).toISOString(), decided_at: r.decided_at ? new Date(r.decided_at).toISOString() : null })) as ChangeProps["requests"],

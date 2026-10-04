@@ -1,25 +1,28 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, MapPin, CalendarDays, Clock, Users, Camera, Video, Heart, UploadCloud, MessageCircle, Phone, Lock, Images, Film } from "lucide-react";
-import { currentMember } from "@/lib/services/me";
+import { requireActiveMember } from "@/lib/services/me";
 import { weddingForMember } from "@/lib/services/team";
 import { Card, CardHeader, CardBody, StatusBadge, DescList, Avatar, Badge, ButtonLink, EmptyState, Alert } from "@/components/ui";
 import { money, ROLE_LABEL } from "@/lib/pricing";
 import { fmtLong, fmtTime, fmtDate, daysUntil, bytes, cn } from "@/lib/utils";
 import { WeddingDocuments, PrepConfirm, QuickMessage } from "./client";
 import { LocationCard, ShareDetails } from "./logistics";
+import { AgreementCard } from "./agreement";
 import { mapLinks } from "@/lib/maps";
+import { mileagePay, milesLabel } from "@/lib/geo";
 import { weddingPlaces, placeLine } from "@/lib/venues";
 
 export const metadata = { title: "Wedding details" };
 
 export default async function WeddingDetail({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { user, member } = await currentMember();
+  const { user, member } = await requireActiveMember();
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
   const data = await weddingForMember(member.id, id);
   if (!data) notFound();
-  const { assignment: a, wedding: w, timeline, team, documents, questionnaire, uploads, conversationId, client } = data;
+  const { assignment: a, wedding: w, timeline, team, documents, questionnaire, uploads, conversationId, client, cancellation, contract } = data;
+  if (a.status === "offered") redirect(`/team/open?id=${a.id}`);
   const d = daysUntil(a.wedding_date);
   const past = d < 0;
   const status = a.wedding_status === "cancelled" ? "cancelled" : past ? "completed" : a.status === "accepted" ? "confirmed" : a.status;
@@ -68,7 +71,7 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
         </div>
       </div>
 
-      {a.status === "pending" && <Alert tone="warning" icon={Clock} title="Awaiting coordinator approval">You&apos;ll be notified as soon as your request for this wedding is confirmed.</Alert>}
+      {a.status === "pending" && <Alert tone="warning" icon={Clock} title="Awaiting coordinator approval">You&apos;ve signed the agreement for this wedding. You&apos;ll be notified as soon as a coordinator confirms you.</Alert>}
       {!past && a.status === "accepted" && <PrepConfirm assignmentId={a.id} confirmedAt={a.prep_confirmed_at ? String(a.prep_confirmed_at) : null} />}
 
       <div className="grid gap-6 xl:grid-cols-3">
@@ -126,6 +129,11 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
         </div>
 
         <div className="space-y-6">
+          {(["accepted", "pending"].includes(a.status) || (a.status === "completed" && contract)) && (
+            <AgreementCard assignmentId={a.id} status={a.status} past={past} daysOut={d} memberName={member.full_name} couple={`${a.couple} · ${fmtDate(a.wedding_date, "EEE, MMM d")}`}
+              contract={contract ? { id: contract.id, signed_at: new Date(contract.signed_at).toISOString(), template_version: contract.template_version } : null}
+              cancellation={cancellation ? { ...cancellation, requested_at: new Date(cancellation.requested_at).toISOString(), decided_at: cancellation.decided_at ? new Date(cancellation.decided_at).toISOString() : null } as never : null} />
+          )}
           <LocationCard places={locationPlaces} />
           <Card>
             <CardHeader title="Wedding team" />
@@ -187,7 +195,7 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
           <Card className="p-5">
             <p className="text-[12px] uppercase tracking-wide text-muted">Your pay for this wedding</p>
             <p className="mt-1 text-2xl font-semibold text-ink">{money(a.compensation)}</p>
-            <p className="text-[13px] text-muted">{a.coverage_hours} hours{a.travel_miles && a.travel_miles > 100 ? " · mileage reimbursed" : ""}</p>
+            <p className="text-[13px] text-muted">{a.coverage_hours} hours{mileagePay(a.travel_miles) ? ` · + ${money(mileagePay(a.travel_miles))} mileage (${milesLabel(a.travel_miles)})` : a.travel_miles != null ? ` · ${milesLabel(a.travel_miles)} from home` : ""}</p>
             <Link href="/team/handbook/rates-mileage-bonuses" className="mt-3 inline-flex items-center gap-1 text-[13px] font-medium text-blush-600 hover:underline"><Heart className="size-3.5" />How pay is calculated</Link>
             <Users className="hidden" />
           </Card>

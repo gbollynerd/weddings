@@ -104,7 +104,9 @@ const STATUS: Record<string, [string, Tone]> = {
   // assignments / opportunities
   open: ["Available", "info"], available: ["Available", "success"], pending: ["Pending", "warning"], accepted: ["Accepted", "success"],
   filled: ["Filled", "neutral"], expired: ["Expired", "danger"], completed: ["Completed", "midnight"], cancelled: ["Cancelled", "danger"],
-  confirmed: ["Confirmed", "success"], declined: ["Declined", "neutral"],
+  confirmed: ["Confirmed", "success"], declined: ["Declined", "neutral"], offered: ["Offered", "blush"],
+  // accounts
+  active: ["Active", "success"], applicant: ["Applicant", "warning"], suspended: ["Suspended", "danger"], inactive: ["Inactive", "neutral"],
   // payouts
   processing: ["Processing", "info"], paid: ["Paid", "success"], on_hold: ["On hold", "danger"], scheduled: ["Scheduled", "neutral"],
   failed: ["Failed", "danger"], refunded: ["Refunded", "neutral"], upcoming: ["Upcoming", "blush"],

@@ -19,6 +19,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       <p className="mt-8 text-center text-sm text-muted">
         Planning a wedding? <Link href={`/signup${sp.next ? `?next=${encodeURIComponent(sp.next)}` : ""}`} className="font-medium text-blush-600 hover:underline">Create an account</Link>
       </p>
+      <p className="mt-2 text-center text-sm text-muted">
+        Photographer or videographer? <Link href="/join" className="font-medium text-blush-600 hover:underline">Apply to join our team</Link>
+      </p>
     </div>
   );
 }

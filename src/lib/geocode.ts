@@ -1,4 +1,5 @@
 import "server-only";
+import { matchesHit } from "./address-match";
 
 /**
  * Address search + verification, proxied through our server so results are cached,
@@ -68,3 +69,13 @@ export async function searchAddresses(q: string): Promise<{ ok: true; hits: Addr
   }
 }
 const rank = (h: AddressHit) => (h.kind === "address" ? 0 : h.kind === "place" ? 1 : 2);
+
+/** Best coordinates for a saved address: a suggestion that matches what was typed, else the top hit. */
+export async function geocodeAddress(address: string | null | undefined): Promise<{ lat: number; lng: number } | null | "unavailable"> {
+  const a = address?.trim();
+  if (!a || a.length < 4) return null;
+  const r = await searchAddresses(a);
+  if (!r.ok) return "unavailable";
+  const h = r.hits.find((x) => matchesHit(a, x)) ?? r.hits[0];
+  return h ? { lat: h.lat, lng: h.lon } : null;
+}

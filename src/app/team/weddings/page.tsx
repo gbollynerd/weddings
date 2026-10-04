@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Heart, MapPin, Clock, Camera, Video, ChevronRight, CalendarX2 } from "lucide-react";
-import { currentMember } from "@/lib/services/me";
+import { requireActiveMember } from "@/lib/services/me";
 import { myAssignments, weddingCounts } from "@/lib/services/team";
 import { LinkTabs, StatusBadge, EmptyState, ButtonLink, Badge } from "@/components/ui";
 import { money, ROLE_LABEL } from "@/lib/pricing";
@@ -9,7 +9,7 @@ import { fmtDate, fmtTime, daysUntil } from "@/lib/utils";
 export const metadata = { title: "My Weddings" };
 
 export default async function MyWeddings({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
-  const { member } = await currentMember();
+  const { member } = await requireActiveMember();
   const tab = ((await searchParams).tab ?? "upcoming") as "upcoming" | "completed" | "cancelled";
   const [rows, counts] = await Promise.all([myAssignments(member.id, tab), weddingCounts(member.id)]);
   return (

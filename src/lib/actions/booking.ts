@@ -7,6 +7,8 @@ import { checkAvailability } from "@/lib/services/catalog";
 import { payments, type CardInput } from "@/lib/payments";
 import { notify } from "@/lib/services/notifications";
 import { quote, compensationFor, marketPrice } from "@/lib/pricing";
+import { after } from "next/server";
+import { geocodeWedding } from "@/lib/services/geo";
 import type { ActionResult } from "./types";
 
 export async function checkAvailabilityAction(market: string, date: string, service: "photo" | "video" | "both") {
@@ -138,7 +140,9 @@ export async function createBookingAction(input: BookingDraft, card: CardInput):
   if (bookingNumber.coordId) await notify(bookingNumber.coordId, "booking", `New booking: ${bookingNumber.couple}`, `${pkg.name} · ${market.city} · ${d.date}`, "/admin");
   // Let team members in that market know there's a new opportunity
   const disciplines = [...new Set(bookingNumber.slots.map((s) => (s.endsWith("photo") ? "photo" : "video")))];
-  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and discipline in ${sql(disciplines)}`;
+  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and status = 'active' and discipline in ${sql(disciplines)}`;
+  // Place the venue on the map for team distances (in the background so checkout stays fast)
+  after(() => geocodeWedding(bookingNumber.weddingId).catch(() => {}));
   for (const l of locals) await notify(l.user_id, "opportunity", "New wedding available", `${market.city}, ${market.state} · ${d.date} needs ${bookingNumber.slots.length} team member${bookingNumber.slots.length > 1 ? "s" : ""}.`, "/team/open");
   revalidatePath("/", "layout");
   return { ok: true, data: { bookingNumber: bookingNumber.number } };

@@ -25,6 +25,7 @@ export default async function ProfilePage() {
         service_radius: member.service_radius, specialties: member.specialties, years_experience: member.years_experience, languages: member.languages,
         portfolio_url: member.portfolio_url ?? "", instagram: member.instagram ?? "", website: member.website ?? "", avatar_url: member.avatar_url ?? "",
         discipline: member.discipline, city: member.city ? `${member.city}, ${member.state}` : "",
+        home_address: member.home_address ?? "", equipment: member.equipment ?? "", home_located: member.lat != null,
       }}
     />
   );
