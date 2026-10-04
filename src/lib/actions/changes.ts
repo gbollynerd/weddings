@@ -9,6 +9,7 @@ import { fmtDate } from "@/lib/utils";
 import {
   bookingForChange, pricePackageChange, applyTotalChange, syncTeamSlots, isoDay, daysBetween, MIN_LEAD_DAYS,
 } from "@/lib/services/changes";
+import { weddingPlaces, placeLine, type Place } from "@/lib/venues";
 import type { ActionResult } from "./types";
 
 type Db = typeof sql;
@@ -16,7 +17,7 @@ type Db = typeof sql;
 /** The signed-in client's booking for a wedding, if it's still changeable. */
 async function ownedBooking(userId: string, weddingId: string) {
   const [b] = await sql`select b.id, b.booking_number, b.package_id, b.status, w.id as wedding_id, w.couple, w.wedding_date::text, w.status as wedding_status, w.market_id,
-      w.venue_name, w.venue_address, w.ceremony_location, w.reception_location
+      w.venue_name, w.venue_address, w.ceremony_location, w.reception_location, w.reception_venue_name, w.reception_venue_address
     from bookings b join weddings w on w.id = b.wedding_id join clients c on c.id = b.client_id
     where w.id = ${weddingId} and c.user_id = ${userId} and b.status <> 'cancelled' limit 1`;
   if (!b) return { error: "We couldn't find that booking." } as const;
@@ -32,15 +33,21 @@ async function teamAndCoordinators(weddingId: string) {
 }
 const coordinators = () => sql`select id from users where role = 'coordinator'`;
 
-/* ───────────── Venue: applies immediately ───────────── */
+/* ───────────── Venues: apply immediately ───────────── */
 const Venue = z.object({
-  venue: z.string().trim().min(2, "Enter the venue name").max(120),
-  address: z.string().trim().max(200).optional().default(""),
-  ceremony: z.string().trim().min(2, "Where is the ceremony?").max(160),
-  reception: z.string().trim().max(160).optional().default(""),
+  ceremonyVenue: z.string().trim().min(2, "Enter the ceremony venue").max(120),
+  ceremonyAddress: z.string().trim().max(200).optional().default(""),
+  ceremonyArea: z.string().trim().max(120).optional().default(""),
+  receptionSame: z.boolean().default(true),
+  receptionVenue: z.string().trim().max(120).optional().default(""),
+  receptionAddress: z.string().trim().max(200).optional().default(""),
+  receptionArea: z.string().trim().max(120).optional().default(""),
+}).superRefine((v, ctx) => {
+  if (!v.receptionSame && v.receptionVenue.length < 2) ctx.addIssue({ code: "custom", path: ["receptionVenue"], message: "Enter the reception venue" });
 });
+export type VenueInput = z.input<typeof Venue>;
 
-export async function updateVenueAction(weddingId: string, input: z.input<typeof Venue>): Promise<ActionResult> {
+export async function updateVenueAction(weddingId: string, input: VenueInput): Promise<ActionResult> {
   const u = await requireUser(["client"]);
   const own = await ownedBooking(u.id, weddingId);
   if ("error" in own) return { ok: false, message: own.error };
@@ -51,24 +58,41 @@ export async function updateVenueAction(weddingId: string, input: z.input<typeof
   }
   const v = parsed.data;
   const { b } = own;
-  const [known] = await sql`select id, address from venues where market_id = ${b.market_id} and lower(name) = lower(${v.venue})`;
-  const address = v.address || known?.address || null;
-  const reception = v.reception || v.ceremony;
-  const same = v.venue === b.venue_name && (address ?? "") === (b.venue_address ?? "") && v.ceremony === b.ceremony_location && reception === b.reception_location;
-  if (same) return { ok: true, message: "No changes to save" };
+  const lookup = async (name: string) => (await sql`select id, address from venues where market_id = ${b.market_id} and lower(name) = lower(${name})`)[0] ?? null;
+  const known = await lookup(v.ceremonyVenue);
+  // A "different" reception venue with the same name and address as the ceremony is the same venue.
+  const separate = !v.receptionSame && !(v.receptionVenue.toLowerCase() === v.ceremonyVenue.toLowerCase() && (!v.receptionAddress || v.receptionAddress === v.ceremonyAddress));
+  const rKnown = separate ? await lookup(v.receptionVenue) : null;
+  const next = {
+    venue_name: v.ceremonyVenue, venue_address: v.ceremonyAddress || known?.address || null, ceremony_location: v.ceremonyArea || null,
+    reception_venue_name: separate ? v.receptionVenue : null, reception_venue_address: separate ? v.receptionAddress || rKnown?.address || null : null,
+    reception_location: v.receptionArea || null,
+  };
+  const before = weddingPlaces(b as never);
+  const after = weddingPlaces(next);
+  const key = (p: typeof after) => JSON.stringify(p);
+  if (key(before) === key(after)) return { ok: true, message: "No changes to save" };
 
-  await sql`update weddings set venue_name = ${v.venue}, venue_id = ${known?.id ?? null}, venue_address = ${address}, ceremony_location = ${v.ceremony}, reception_location = ${reception}
+  await sql`update weddings set venue_name = ${next.venue_name}, venue_id = ${known?.id ?? null}, venue_address = ${next.venue_address},
+      ceremony_location = ${next.ceremony_location}, reception_location = ${next.reception_location},
+      reception_venue_name = ${next.reception_venue_name}, reception_venue_address = ${next.reception_venue_address}
     where id = ${weddingId}`;
-  const info = `**${v.venue}**\n\n${address ?? ""}\n\nCeremony: ${v.ceremony}\nReception: ${reception}`;
+  const block = (label: string, p: Place) => `**${label}:** ${placeLine(p)}${p.address ? `\n${p.address}` : ""}`;
+  const info = after.same
+    ? `${block("Ceremony & reception", { ...after.ceremony, area: null })}${after.ceremony.area ? `\n\nCeremony: ${after.ceremony.area}` : ""}${after.reception.area ? `\nReception: ${after.reception.area}` : ""}`
+    : `${block("Ceremony", after.ceremony)}\n\n${block("Reception", after.reception)}`;
   const [doc] = await sql`update documents set content = ${info} where wedding_id = ${weddingId} and type = 'venue_info' returning id`;
   if (!doc) await sql`insert into documents (wedding_id, type, title, content, visibility) values (${weddingId}, 'venue_info', 'Venue information', ${info}, 'team')`;
 
-  const venueChanged = v.venue !== b.venue_name || (address ?? "") !== (b.venue_address ?? "");
+  const moved = (x: Place, y: Place) => x.venue !== y.venue || (x.address ?? "") !== (y.address ?? "");
+  const venueChanged = moved(before.ceremony, after.ceremony) || moved(before.reception, after.reception);
   const title = venueChanged ? `Venue changed: ${b.couple}` : `Location details updated: ${b.couple}`;
-  const body = venueChanged ? `Now at ${v.venue}${address ? ` · ${address}` : ""} on ${fmtDate(b.wedding_date)}.` : `Ceremony: ${v.ceremony} · Reception: ${reception}`;
+  const body = after.same
+    ? `Ceremony & reception at ${after.ceremony.venue}${after.ceremony.address ? ` · ${after.ceremony.address}` : ""} on ${fmtDate(b.wedding_date)}.`
+    : `Ceremony at ${placeLine(after.ceremony)}; reception at ${placeLine(after.reception)} on ${fmtDate(b.wedding_date)}.`;
   for (const r of await teamAndCoordinators(weddingId)) await notify(r.user_id, "change", title, body, r.kind === "team" ? `/team/weddings/${weddingId}` : "/admin");
   revalidatePath("/", "layout");
-  return { ok: true, message: venueChanged ? "Venue updated — your team has been notified" : "Location details updated" };
+  return { ok: true, message: venueChanged ? "Venues updated — your team has been notified" : "Location details updated" };
 }
 
 /* ───────────── Package: request ───────────── */

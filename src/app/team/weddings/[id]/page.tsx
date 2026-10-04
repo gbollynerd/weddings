@@ -9,6 +9,7 @@ import { fmtLong, fmtTime, fmtDate, daysUntil, bytes, cn } from "@/lib/utils";
 import { WeddingDocuments, PrepConfirm, QuickMessage } from "./client";
 import { LocationCard, ShareDetails } from "./logistics";
 import { mapLinks } from "@/lib/maps";
+import { weddingPlaces, placeLine } from "@/lib/venues";
 
 export const metadata = { title: "Wedding details" };
 
@@ -24,11 +25,21 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
   const status = a.wedding_status === "cancelled" ? "cancelled" : past ? "completed" : a.status === "accepted" ? "confirmed" : a.status;
   const isVideo = a.role.includes("video");
   const q = (questionnaire?.answers ?? {}) as Record<string, string>;
-  const fullAddress = a.venue_address || `${a.venue_name}, ${a.city}, ${a.state}`;
+  const places = weddingPlaces({ ...a, ...(w ?? {}) } as never);
+  const cityLine = `${a.city}, ${a.state}`;
+  const addr = (p: { venue: string; address: string | null }) => p.address || `${p.venue}, ${cityLine}`;
+  const fullAddress = addr(places.ceremony);
+  const areas = [places.ceremony.area && `Ceremony: ${places.ceremony.area}`, places.reception.area && `Reception: ${places.reception.area}`].filter(Boolean).join(" · ");
+  const locationPlaces = places.same
+    ? [{ label: "Ceremony & reception", venue: places.ceremony.venue, address: fullAddress, area: areas || null }]
+    : [
+        { label: "Ceremony", venue: places.ceremony.venue, address: fullAddress, area: places.ceremony.area },
+        { label: "Reception", venue: places.reception.venue, address: addr(places.reception), area: places.reception.area },
+      ];
   const shareInfo = {
     couple: a.couple, dateLong: fmtLong(a.wedding_date), dateShort: fmtDate(a.wedding_date, "EEE MMM d"),
     callTime: fmtTime(a.call_time), coverage: `${a.coverage_hours} hrs coverage`, role: ROLE_LABEL[a.role],
-    venue: a.venue_name, address: fullAddress, ceremony: w?.ceremony_location ?? null, reception: w?.reception_location ?? null,
+    places: locationPlaces,
     firstEvents: timeline.slice(0, 6).map((t) => ({ time: fmtTime(t.time), title: t.title })),
     coordinator: "Grace Thompson", onCall: "(704) 555-0199", weddingId: id,
   };
@@ -46,6 +57,7 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
             <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-sm text-midnight-600">
               <span className="flex items-center gap-1.5"><CalendarDays className="size-4 text-midnight-300" />{fmtLong(a.wedding_date)}</span>
               <a href={mapLinks(fullAddress).view} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 underline decoration-midnight-200 underline-offset-4 hover:text-ink hover:decoration-midnight-400"><MapPin className="size-4 text-midnight-300" />{a.venue_name}, {a.city}, {a.state}</a>
+              {!places.same && <a href={mapLinks(addr(places.reception)).view} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 underline decoration-midnight-200 underline-offset-4 hover:text-ink hover:decoration-midnight-400"><MapPin className="size-4 text-blush-400" />Reception: {places.reception.venue}</a>}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -68,11 +80,12 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
                 ["Couple", a.couple],
                 ["Date", fmtDate(a.wedding_date, "EEE, MMM d, yyyy")],
                 ["Your call time", fmtTime(a.call_time)],
-                ["Venue", a.venue_name],
-                ["Address", a.venue_address],
-                ["Location", `${a.city}, ${a.state}`],
-                ["Ceremony", w?.ceremony_location],
-                ["Reception", w?.reception_location],
+                ["Ceremony", placeLine(places.ceremony)],
+                ["Reception", places.same ? (places.reception.area ? `Same venue · ${places.reception.area}` : "Same venue") : placeLine(places.reception)],
+                ["Location", cityLine],
+                ...(places.same
+                  ? [["Address", places.ceremony.address] as [string, string | null]]
+                  : [["Ceremony address", places.ceremony.address] as [string, string | null], ["Reception address", places.reception.address] as [string, string | null]]),
                 ["Coverage", `${a.coverage_hours} hours · ${a.package_name ?? ""}`],
                 ["Assigned role", ROLE_LABEL[a.role]],
                 ["Guests", a.guest_count],
@@ -113,7 +126,7 @@ export default async function WeddingDetail({ params }: { params: Promise<{ id: 
         </div>
 
         <div className="space-y-6">
-          <LocationCard venue={a.venue_name} address={fullAddress} />
+          <LocationCard places={locationPlaces} />
           <Card>
             <CardHeader title="Wedding team" />
             <CardBody className="space-y-3">

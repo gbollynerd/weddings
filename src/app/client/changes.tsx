@@ -1,8 +1,8 @@
 "use client";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { MapPin, Package as PackageIcon, CalendarClock, Hourglass, X, CheckCircle2, XCircle, Info, Camera, Video, Sparkles, AlertTriangle } from "lucide-react";
-import { Button, Field, Input, Textarea, Badge, Alert } from "@/components/ui";
+import { MapPin, Church, PartyPopper, Package as PackageIcon, CalendarClock, Hourglass, X, CheckCircle2, XCircle, Info, Camera, Video, Sparkles, AlertTriangle } from "lucide-react";
+import { Button, Field, Input, Textarea, Badge, Alert, Checkbox } from "@/components/ui";
 import { Modal, useAction } from "@/components/ui/interactive";
 import { updateVenueAction, requestPackageChangeAction, requestDateChangeAction, cancelChangeRequestAction } from "@/lib/actions/changes";
 import { checkAvailabilityAction } from "@/lib/actions/booking";
@@ -16,10 +16,14 @@ export type ChangeReq = {
   created_at: string; decided_at: string | null; from_date: string | null; to_date: string | null; from_package: string | null; to_package: string | null;
   total_before: number | null; total_after: number | null; removed_addons: string[];
 };
+export type VenueForm = {
+  ceremonyVenue: string; ceremonyAddress: string; ceremonyArea: string;
+  receptionSame: boolean; receptionVenue: string; receptionAddress: string; receptionArea: string;
+};
 export type ChangeProps = {
   weddingId: string; weddingDate: string; daysToGo: number; market: string; service: "photo" | "video" | "both";
   packageSlug: string; packageName: string; packagePrice: number; total: number; balance: number;
-  venue: { name: string; address: string; ceremony: string; reception: string }; venueOptions: { name: string; address: string }[];
+  venue: VenueForm; venueOptions: { name: string; address: string }[];
   packages: PkgOption[]; addons: BookedAddon[]; requests: ChangeReq[];
 };
 
@@ -34,7 +38,7 @@ export function ChangeActions(p: ChangeProps) {
   return (
     <>
       <div className="mt-6 flex flex-col gap-2 border-t border-line pt-5 sm:flex-row sm:flex-wrap">
-        <Button variant="outline" size="sm" icon={MapPin} onClick={() => setOpen("venue")}>Edit venue</Button>
+        <Button variant="outline" size="sm" icon={MapPin} onClick={() => setOpen("venue")}>Edit venues</Button>
         <Button variant="outline" size="sm" icon={PackageIcon} onClick={() => setOpen("package")} disabled={pending("package")} title={pending("package") ? "A package change is already waiting for review" : undefined}>Change package</Button>
         <Button variant="outline" size="sm" icon={CalendarClock} onClick={() => setOpen("date")} disabled={pending("date")} title={pending("date") ? "A date change is already waiting for review" : undefined}>Change date</Button>
       </div>
@@ -45,19 +49,25 @@ export function ChangeActions(p: ChangeProps) {
   );
 }
 
-/* ───────────── Venue (applies immediately) ───────────── */
+/* ───────────── Venues (apply immediately) ───────────── */
 function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangeProps & { open: boolean; onClose: () => void }) {
   const router = useRouter();
   const { run, pending } = useAction();
   const [f, setF] = React.useState(venue);
   const [errors, setErrors] = React.useState<Record<string, string>>({});
   React.useEffect(() => { if (open) { setF(venue); setErrors({}); } }, [open, venue]);
-  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
+  type K = keyof VenueForm;
+  const set = (k: K) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = k === "receptionSame" ? e.target.checked : e.target.value;
     setF((s) => {
-      const next = { ...s, [k]: v };
-      // Picking a known venue fills in its address
-      if (k === "name") { const hit = venueOptions.find((o) => o.name.toLowerCase() === v.toLowerCase()); if (hit && (!s.address || s.address === venue.address)) next.address = hit.address; }
+      const next = { ...s, [k]: v } as VenueForm;
+      // Picking a known venue fills in its address (unless the client already typed a different one)
+      const fill = (nameKey: K, addrKey: K, original: string) => {
+        const hit = venueOptions.find((o) => o.name.toLowerCase() === String(v).toLowerCase());
+        if (k === nameKey && hit && (!s[addrKey] || s[addrKey] === original)) (next[addrKey] as string) = hit.address;
+      };
+      fill("ceremonyVenue", "ceremonyAddress", venue.ceremonyAddress);
+      fill("receptionVenue", "receptionAddress", venue.receptionAddress);
       return next;
     });
     setErrors((x) => ({ ...x, [k]: "" }));
@@ -65,28 +75,58 @@ function VenueModal({ open, onClose, weddingId, venue, venueOptions }: ChangePro
   const save = (e?: React.FormEvent) => {
     e?.preventDefault();
     run(async () => {
-      const r = await updateVenueAction(weddingId, { venue: f.name, address: f.address, ceremony: f.ceremony, reception: f.reception });
-      if (!r.ok && r.fieldErrors) setErrors({ name: r.fieldErrors.venue ?? "", address: r.fieldErrors.address ?? "", ceremony: r.fieldErrors.ceremony ?? "", reception: r.fieldErrors.reception ?? "" });
+      const r = await updateVenueAction(weddingId, f);
+      if (!r.ok && r.fieldErrors) setErrors(r.fieldErrors);
       return r;
     }, { onSuccess: () => { onClose(); router.refresh(); } });
   };
+  const section = "space-y-4 rounded-2xl border border-line p-4";
+  const heading = (Icon: typeof Church, text: string) => <p className="flex items-center gap-2 text-sm font-semibold text-ink"><span className="grid size-7 place-items-center rounded-lg bg-blush-50 text-blush-600"><Icon className="size-4" /></span>{text}</p>;
   return (
-    <Modal open={open} onClose={onClose} size="md" icon={<span className="grid size-10 place-items-center rounded-2xl bg-blush-50 text-blush-600"><MapPin className="size-5" /></span>}
-      title="Edit venue & locations" description="Changes save right away and your team is notified."
+    <Modal open={open} onClose={onClose} size="lg" icon={<span className="grid size-10 place-items-center rounded-2xl bg-blush-50 text-blush-600"><MapPin className="size-5" /></span>}
+      title="Edit venues" description="Where your ceremony and reception take place. Changes save right away and your team is notified."
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={() => save()} loading={pending}>Save changes</Button></>}>
       <form onSubmit={save} className="space-y-4">
-        <Field label="Venue" required error={errors.name} htmlFor="cv-venue">
-          <Input id="cv-venue" value={f.name} onChange={set("name")} list="cv-venues" aria-invalid={!!errors.name} autoComplete="off" />
-          <datalist id="cv-venues">{venueOptions.map((o) => <option key={o.name} value={o.name} />)}</datalist>
-        </Field>
-        <Field label="Venue address" error={errors.address} hint="Used for your team's directions" htmlFor="cv-address">
-          <Input id="cv-address" value={f.address} onChange={set("address")} placeholder="Street, city" />
-        </Field>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Ceremony location" required error={errors.ceremony} htmlFor="cv-ceremony"><Input id="cv-ceremony" value={f.ceremony} onChange={set("ceremony")} aria-invalid={!!errors.ceremony} placeholder="e.g. Garden lawn" /></Field>
-          <Field label="Reception location" error={errors.reception} hint="Leave blank if same as ceremony" htmlFor="cv-reception"><Input id="cv-reception" value={f.reception} onChange={set("reception")} placeholder="e.g. Grand ballroom" /></Field>
-        </div>
-        <p className="flex items-start gap-2 rounded-2xl bg-canvas p-3 text-[12px] text-muted"><Info className="mt-0.5 size-3.5 shrink-0" />Moving to a venue outside your booked city? Message your coordinator first — travel may affect pricing.</p>
+        <datalist id="cv-venues">{venueOptions.map((o) => <option key={o.name} value={o.name} />)}</datalist>
+
+        <fieldset className={section}>
+          <legend className="sr-only">Ceremony</legend>
+          {heading(Church, "Ceremony")}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Venue" required error={errors.ceremonyVenue} htmlFor="cv-c-venue">
+              <Input id="cv-c-venue" value={f.ceremonyVenue} onChange={set("ceremonyVenue")} list="cv-venues" aria-invalid={!!errors.ceremonyVenue} autoComplete="off" placeholder="e.g. St. Peter's Church" />
+            </Field>
+            <Field label="Room or area" hint="Optional" htmlFor="cv-c-area"><Input id="cv-c-area" value={f.ceremonyArea} onChange={set("ceremonyArea")} placeholder="e.g. Garden lawn" /></Field>
+          </div>
+          <Field label="Address" error={errors.ceremonyAddress} hint="Used for your team's directions" htmlFor="cv-c-address">
+            <Input id="cv-c-address" value={f.ceremonyAddress} onChange={set("ceremonyAddress")} placeholder="Street, city" />
+          </Field>
+        </fieldset>
+
+        <fieldset className={section}>
+          <legend className="sr-only">Reception</legend>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            {heading(PartyPopper, "Reception")}
+            <Checkbox id="cv-same" label="Same venue as the ceremony" checked={f.receptionSame} onChange={set("receptionSame")} />
+          </div>
+          {f.receptionSame ? (
+            <Field label="Room or area" hint={`At ${f.ceremonyVenue || "the ceremony venue"} · optional`} htmlFor="cv-r-area"><Input id="cv-r-area" value={f.receptionArea} onChange={set("receptionArea")} placeholder="e.g. Grand ballroom" /></Field>
+          ) : (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Venue" required error={errors.receptionVenue} htmlFor="cv-r-venue">
+                  <Input id="cv-r-venue" value={f.receptionVenue} onChange={set("receptionVenue")} list="cv-venues" aria-invalid={!!errors.receptionVenue} autoComplete="off" placeholder="e.g. The Ivory Atrium" />
+                </Field>
+                <Field label="Room or area" hint="Optional" htmlFor="cv-r-area"><Input id="cv-r-area" value={f.receptionArea} onChange={set("receptionArea")} placeholder="e.g. Grand ballroom" /></Field>
+              </div>
+              <Field label="Address" error={errors.receptionAddress} hint="Used for your team's directions" htmlFor="cv-r-address">
+                <Input id="cv-r-address" value={f.receptionAddress} onChange={set("receptionAddress")} placeholder="Street, city" />
+              </Field>
+            </>
+          )}
+        </fieldset>
+
+        <p className="flex items-start gap-2 rounded-2xl bg-canvas p-3 text-[12px] text-muted"><Info className="mt-0.5 size-3.5 shrink-0" />Moving outside your booked city? Message your coordinator first — travel may affect pricing.</p>
         <button type="submit" className="hidden" />
       </form>
     </Modal>

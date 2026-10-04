@@ -6,7 +6,7 @@ export async function clientBooking(userId: string, bookingNumber?: string): Pro
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [b] = await sql<Record<string, any>[]>`
     select b.id, b.booking_number, b.total, b.package_price, b.addons_total, b.deposit_amount, b.status, b.created_at, b.service_slug,
-      w.id as wedding_id, w.market_id, w.couple, w.wedding_date::text, w.start_time::text, w.venue_name, w.venue_address, w.ceremony_location, w.reception_location,
+      w.id as wedding_id, w.market_id, w.couple, w.wedding_date::text, w.start_time::text, w.venue_name, w.venue_address, w.ceremony_location, w.reception_location, w.reception_venue_name, w.reception_venue_address,
       w.guest_count, w.wedding_type, w.special_requests, w.notes, w.status as wedding_status,
       m.city, m.state, m.slug as market_slug, m.price_multiplier::float as price_multiplier, p.slug as package_slug, p.name as package_name, p.hours, p.photographers, p.videographers, p.deliverables as package_deliverables, p.features, p.turnaround_days, c.partner_one, c.partner_two
     from bookings b join weddings w on w.id = b.wedding_id join clients c on c.id = b.client_id join markets m on m.id = w.market_id join packages p on p.id = b.package_id

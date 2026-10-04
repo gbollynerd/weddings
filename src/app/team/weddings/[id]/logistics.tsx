@@ -23,25 +23,39 @@ function useCopy() {
   return { copied, copy };
 }
 
-export function LocationCard({ venue, address }: { venue: string; address: string }) {
-  const links = mapLinks(address);
+export type LocationPlace = { label: string; venue: string; address: string; area?: string | null };
+
+/** Map + directions for one venue, or a Ceremony / Reception switch when they're at different places. */
+export function LocationCard({ places }: { places: LocationPlace[] }) {
+  const [i, setI] = React.useState(0);
+  const p = places[Math.min(i, places.length - 1)];
+  const links = mapLinks(p.address);
   const { copied, copy } = useCopy();
   const app = "flex flex-col items-center gap-1.5 rounded-2xl border border-line bg-white px-2 py-3 text-[12px] font-medium text-midnight-700 transition hover:border-midnight-200 hover:bg-canvas";
   return (
     <Card className="overflow-hidden">
-      <a href={links.view} target="_blank" rel="noopener noreferrer" className="group relative block aspect-[16/9] bg-midnight-50" aria-label={`Open ${venue} in Google Maps`}>
-        <iframe title={`Map of ${venue}`} src={links.embed} loading="lazy" referrerPolicy="no-referrer-when-downgrade" className="pointer-events-none absolute inset-0 size-full border-0" />
+      {places.length > 1 && (
+        <div className="flex gap-1 border-b border-line bg-canvas/60 p-1.5" role="tablist" aria-label="Locations">
+          {places.map((x, n) => (
+            <button key={x.label} type="button" role="tab" aria-selected={n === i} onClick={() => setI(n)}
+              className={cn("flex-1 rounded-xl px-3 py-1.5 text-[13px] font-medium transition", n === i ? "bg-white text-ink shadow-sm" : "text-muted hover:text-ink")}>{x.label}</button>
+          ))}
+        </div>
+      )}
+      <a href={links.view} target="_blank" rel="noopener noreferrer" className="group relative block aspect-[16/9] bg-midnight-50" aria-label={`Open ${p.venue} in Google Maps`}>
+        <iframe key={p.address} title={`Map of ${p.venue}`} src={links.embed} loading="lazy" referrerPolicy="no-referrer-when-downgrade" className="pointer-events-none absolute inset-0 size-full border-0" />
         <span className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-1.5 text-[12px] font-medium text-ink shadow-sm transition group-hover:bg-white"><ExternalLink className="size-3.5" />Open map</span>
       </a>
       <CardBody className="space-y-4 pt-4">
         <div className="flex items-start gap-3">
           <span className="grid size-9 shrink-0 place-items-center rounded-xl bg-blush-50 text-blush-600"><MapPin className="size-4" /></span>
           <div className="min-w-0 flex-1">
-            <p className="font-medium text-ink">{venue}</p>
-            <p className="text-[13px] text-muted">{address}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{p.label}</p>
+            <p className="font-medium text-ink">{p.venue}{p.area ? <span className="font-normal text-muted"> · {p.area}</span> : null}</p>
+            <p className="text-[13px] text-muted">{p.address}</p>
           </div>
-          <button type="button" onClick={() => copy(address, "addr", "Address")} className="-m-1 grid size-9 shrink-0 place-items-center rounded-xl text-midnight-400 hover:bg-canvas hover:text-ink" aria-label="Copy address" title="Copy address">
-            {copied === "addr" ? <Check className="size-4 text-success-500" /> : <Copy className="size-4" />}
+          <button type="button" onClick={() => copy(p.address, "addr" + i, "Address")} className="-m-1 grid size-9 shrink-0 place-items-center rounded-xl text-midnight-400 hover:bg-canvas hover:text-ink" aria-label="Copy address" title="Copy address">
+            {copied === "addr" + i ? <Check className="size-4 text-success-500" /> : <Copy className="size-4" />}
           </button>
         </div>
         <div>
@@ -60,7 +74,7 @@ export function LocationCard({ venue, address }: { venue: string; address: strin
 /* ───────────── Share event details ───────────── */
 export type ShareInfo = {
   couple: string; dateLong: string; dateShort: string; callTime: string; coverage: string; role: string;
-  venue: string; address: string; ceremony?: string | null; reception?: string | null;
+  places: LocationPlace[];
   firstEvents: { time: string; title: string }[]; coordinator: string; onCall: string; weddingId: string;
 };
 
@@ -71,13 +85,10 @@ function buildText(s: ShareInfo, origin: string) {
     ``,
     `Call time: ${s.callTime} (${s.coverage})`,
     `Role: ${s.role}`,
-    ``,
-    `${s.venue}`,
-    `${s.address}`,
-    s.ceremony ? `Ceremony: ${s.ceremony}` : "",
-    s.reception ? `Reception: ${s.reception}` : "",
-    `Directions: ${mapLinks(s.address).view}`,
   ];
+  for (const p of s.places) {
+    L.push("", `${s.places.length > 1 ? p.label + ": " : ""}${p.venue}${p.area ? ` (${p.area})` : ""}`, p.address, `Directions: ${mapLinks(p.address).view}`);
+  }
   if (s.firstEvents.length) { L.push("", "Schedule:"); for (const e of s.firstEvents) L.push(`• ${e.time} — ${e.title}`); }
   L.push("", `Coordinator: ${s.coordinator} · on-call ${s.onCall}`);
   if (origin) L.push(`Full details: ${origin}/team/weddings/${s.weddingId}`);

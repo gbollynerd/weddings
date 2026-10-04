@@ -25,14 +25,14 @@ export type AssignmentRow = {
   id: string; wedding_id: string; role: string; status: string; compensation: number; coverage_hours: number; call_time: string | null;
   requirements: string[]; notes: string | null; travel_miles: number | null; expires_at: string | null; accepted_at: string | null;
   prep_confirmed_at: string | null; requires_approval: boolean;
-  couple: string; wedding_date: string; start_time: string; venue_name: string; venue_address: string | null; guest_count: number | null;
+  couple: string; wedding_date: string; start_time: string; venue_name: string; venue_address: string | null; reception_venue_name: string | null; guest_count: number | null;
   wedding_type: string | null; wedding_status: string; city: string; state: string; package_name: string | null; service_slug: string | null;
 };
 
 const assignmentSelect = sql`
   a.id, a.wedding_id, a.role, a.status, a.compensation, a.coverage_hours, a.call_time::text, a.requirements, a.notes, a.travel_miles,
   a.expires_at, a.accepted_at, a.prep_confirmed_at, a.requires_approval,
-  w.couple, w.wedding_date::text, w.start_time::text, w.venue_name, w.venue_address, w.guest_count, w.wedding_type, w.status as wedding_status,
+  w.couple, w.wedding_date::text, w.start_time::text, w.venue_name, w.venue_address, w.reception_venue_name, w.guest_count, w.wedding_type, w.status as wedding_status,
   m.city, m.state, p.name as package_name, b.service_slug`;
 const assignmentJoins = sql`
   from wedding_assignments a
@@ -77,7 +77,7 @@ export async function weddingForMember(memberId: string, weddingId: string) {
     // Team only sees what they need: names, planner, VIP notes. No client email/phone/payment info.
     sql`select c.partner_one, c.partner_two from weddings w join clients c on c.id = w.client_id where w.id = ${weddingId}`,
   ]);
-  const [w] = await sql`select ceremony_location, reception_location, special_requests, notes from weddings where id = ${weddingId}`;
+  const [w] = await sql`select ceremony_location, reception_location, reception_venue_name, reception_venue_address, special_requests, notes from weddings where id = ${weddingId}`;
   return { assignment, wedding: w, timeline, team, documents, questionnaire: questionnaire[0] ?? null, uploads, conversationId: conversation[0]?.id ?? null, client: client[0] ?? null };
 }
 

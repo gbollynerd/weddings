@@ -435,3 +435,8 @@ create table if not exists wedding_change_requests (
 create index if not exists change_requests_wedding_idx on wedding_change_requests(wedding_id, created_at desc);
 create unique index if not exists change_requests_one_pending on wedding_change_requests(wedding_id, kind) where status = 'pending';
 alter table wedding_change_requests enable row level security;
+
+-- Reception can be at a different venue from the ceremony (null = same venue as the ceremony).
+-- ceremony_location / reception_location hold the room or area within each venue.
+alter table weddings add column if not exists reception_venue_name text;
+alter table weddings add column if not exists reception_venue_address text;

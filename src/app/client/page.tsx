@@ -9,6 +9,7 @@ import { PayButton } from "./pay-button";
 import { ChangeActions, ChangeRequestList, type ChangeProps } from "./changes";
 import { sql } from "@/lib/db";
 import { marketPrice } from "@/lib/pricing";
+import { weddingPlaces, placeLine } from "@/lib/venues";
 
 export const metadata = { title: "My Wedding" };
 
@@ -31,6 +32,7 @@ export default async function ClientHome() {
     { done: b.deliverables.length > 0, label: "Gallery delivered", sub: d < 0 ? "In editing" : `~${Math.round(b.turnaround_days / 7)} weeks after`, href: "/client/documents" },
   ];
   const progress = Math.round((steps.filter((s) => s.done).length / steps.length) * 100);
+  const places = weddingPlaces(b as never);
   const canChange = d >= 0 && b.status !== "cancelled" && b.status !== "completed";
   const [pkgs, venues] = canChange
     ? await Promise.all([
@@ -41,7 +43,10 @@ export default async function ClientHome() {
   const change: ChangeProps = {
     weddingId: b.wedding_id, weddingDate: b.wedding_date, daysToGo: d, market: b.market_slug, service: b.service_slug,
     packageSlug: b.package_slug, packageName: b.package_name, packagePrice: b.package_price, total: b.total, balance: b.balance,
-    venue: { name: b.venue_name ?? "", address: b.venue_address ?? "", ceremony: b.ceremony_location ?? "", reception: b.reception_location ?? "" },
+    venue: {
+      ceremonyVenue: places.ceremony.venue ?? "", ceremonyAddress: places.ceremony.address ?? "", ceremonyArea: places.ceremony.area ?? "",
+      receptionSame: places.same, receptionVenue: places.same ? "" : places.reception.venue, receptionAddress: places.same ? "" : places.reception.address ?? "", receptionArea: places.reception.area ?? "",
+    },
     venueOptions: venues.map((v) => ({ name: v.name, address: v.address })),
     packages: pkgs.map((x) => ({ slug: x.slug, name: x.name, tagline: x.tagline ?? "", service_slug: x.service_slug, hours: x.hours, popular: x.popular, price: marketPrice(x.base_price, b.price_multiplier) })),
     addons: b.addons.map((a) => ({ name: a.name, applies_to: a.applies_to, line: a.unit_price * Math.max(1, a.quantity) })),
@@ -103,8 +108,8 @@ export default async function ClientHome() {
             <CardBody>
               <DescList cols={3} items={[
                 ["Package", `${b.package_name}`], ["Coverage", `${b.hours} hours`], ["Services", b.service_slug === "both" ? "Photo + Video" : b.service_slug === "photo" ? "Photography" : "Videography"],
-                ["Venue", b.venue_name], ["Ceremony", b.ceremony_location], ["Reception", b.reception_location],
-                ["Guests", b.guest_count], ["Style", b.wedding_type], ["Start time", fmtTime(b.start_time)],
+                ["Ceremony", placeLine(places.ceremony)], ["Reception", places.same ? (places.reception.area ? `Same venue · ${places.reception.area}` : "Same venue") : placeLine(places.reception)], ["Start time", fmtTime(b.start_time)],
+                ["Guests", b.guest_count], ["Style", b.wedding_type],
               ]} />
               <div className="mt-6 flex flex-wrap gap-2">
                 {(b.package_deliverables ?? []).map((x: string) => <Badge key={x}>{x}</Badge>)}

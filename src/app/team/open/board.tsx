@@ -250,7 +250,7 @@ function DetailBody({ item: i }: { item: Item }) {
           [CalendarDays, "Date", fmtLong(i.wedding_date)],
           [Clock, "Call time", `${fmtTime(i.call_time)} · ${i.coverage_hours} hours`],
           [CircleDollarSign, "Compensation", `${money(i.compensation)} ($${i.hourly}/hr)`],
-          [MapPin, "Venue", `${i.venue_name}${i.venue_address ? ` — ${i.venue_address}` : ""}`],
+          [MapPin, i.reception_venue_name ? "Venues" : "Venue", `${i.venue_name}${i.venue_address ? ` — ${i.venue_address}` : ""}${i.reception_venue_name ? ` · Reception at ${i.reception_venue_name}` : ""}`],
           [Navigation, "Distance", i.travel_miles ? `${i.travel_miles} miles${i.travel_miles > 100 ? " · mileage paid" : ""}` : "Local"],
           [Users, "Guests", `${i.guest_count ?? "—"} · ${i.wedding_type ?? ""}`],
         ].map(([I, k, v], idx) => {
