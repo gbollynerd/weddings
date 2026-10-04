@@ -7,7 +7,7 @@ import { sql } from "@/lib/db";
 import * as team from "@/lib/services/team";
 import * as up from "@/lib/services/uploads";
 import { markRead, markUnread } from "@/lib/services/notifications";
-import { sendMessage, startConversation } from "@/lib/services/messages";
+import { sendMessage, startConversation, addParticipants, removeParticipant, messageClient, joinClientThread } from "@/lib/services/messages";
 import { geocodeMemberHome } from "@/lib/services/geo";
 import type { ActionResult } from "./types";
 
@@ -242,4 +242,46 @@ export async function startConversationAction(input: { subject: string; body: st
   }
   revalidatePath("/", "layout");
   return { ok: true, message: "Message sent", data: { id } };
+}
+
+const guard = async <T,>(fn: () => Promise<T>): Promise<{ ok: true; data: T } | { ok: false; message: string }> => {
+  try { return { ok: true, data: await fn() }; } catch (e) { return { ok: false, message: e instanceof Error ? e.message : "Something went wrong." }; }
+};
+const uuid = (v: unknown) => typeof v === "string" && /^[0-9a-f-]{36}$/.test(v);
+
+/* Coordinators/admins: manage who's in a thread */
+export async function addParticipantsAction(conversationId: string, userIds: string[]): Promise<ActionResult> {
+  const user = await requireUser(["coordinator", "admin"]);
+  if (!uuid(conversationId) || !Array.isArray(userIds) || !userIds.every(uuid)) return { ok: false, message: "Invalid request." };
+  const r = await guard(() => addParticipants(user.id, conversationId, userIds));
+  if (!r.ok) return r;
+  revalidatePath("/", "layout");
+  return { ok: true, message: r.data.length === 1 ? `Added ${r.data[0].full_name}` : `Added ${r.data.length} people` };
+}
+export async function removeParticipantAction(conversationId: string, userId: string): Promise<ActionResult> {
+  const user = await requireUser(["coordinator", "admin"]);
+  if (!uuid(conversationId) || !uuid(userId)) return { ok: false, message: "Invalid request." };
+  const r = await guard(() => removeParticipant(user.id, conversationId, userId));
+  if (!r.ok) return r;
+  revalidatePath("/", "layout");
+  return { ok: true, message: `Removed ${r.data}` };
+}
+export async function messageClientAction(input: { weddingId: string; subject: string; body: string }): Promise<ActionResult<{ id: string }>> {
+  const user = await requireUser(["coordinator", "admin"]);
+  if (!uuid(input.weddingId)) return { ok: false, message: "Invalid request." };
+  const subject = input.subject.trim(), body = input.body.trim();
+  if (subject.length < 3) return { ok: false, message: "Add a subject.", fieldErrors: { subject: "Required" } };
+  if (body.length < 2) return { ok: false, message: "Write a message.", fieldErrors: { body: "Required" } };
+  if (body.length > 4000) return { ok: false, message: "Messages are limited to 4,000 characters.", fieldErrors: { body: "Too long" } };
+  const r = await guard(() => messageClient(user.id, input.weddingId, subject, body));
+  if (!r.ok) return r;
+  revalidatePath("/", "layout");
+  return { ok: true, message: "Message sent", data: { id: r.data } };
+}
+export async function joinClientThreadAction(conversationId: string): Promise<ActionResult> {
+  const user = await requireUser(["coordinator", "admin"]);
+  if (!uuid(conversationId)) return { ok: false, message: "Invalid request." };
+  const r = await guard(() => joinClientThread(user.id, conversationId));
+  if (!r.ok) return r;
+  return { ok: true };
 }

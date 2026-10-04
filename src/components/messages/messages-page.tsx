@@ -16,7 +16,7 @@ export async function MessagesPage({ userId, sp, weddings }: { userId: string; s
       <MessagesView me={userId}
         convos={list.map((c) => ({ ...c, last_message_at: s(c.last_message_at) })) as Convo[]}
         thread={thread ? ({ ...thread, messages: thread.messages.map((m) => ({ ...m, created_at: s(m.created_at) })), participants: thread.participants.map((p) => ({ ...p, last_read_at: s(p.last_read_at) })) } as unknown as Thread) : null}
-        weddings={weddings} contacts={contacts.map((c) => ({ id: c.id, full_name: c.full_name, role: c.role, avatar_url: c.avatar_url }))} isClient={me?.role === "client"} />
+        weddings={weddings} contacts={contacts.map((c) => ({ id: c.id, full_name: c.full_name, role: c.role, avatar_url: c.avatar_url }))} isClient={me?.role === "client"} canManage={me?.role === "coordinator" || me?.role === "admin"} />
     </Suspense>
   );
 }

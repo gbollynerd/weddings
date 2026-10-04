@@ -47,7 +47,7 @@ export type SlotRow = {
 export async function adminWedding(weddingId: string) {
   const [w] = await sql`select w.*, w.wedding_date::text as wedding_date, w.start_time::text as start_time, m.city, m.state, m.slug as market_slug,
       b.id as booking_id, b.booking_number, b.total, b.status as booking_status, b.service_slug, p.name as package, p.hours as package_hours,
-      c.partner_one, c.partner_two, u.email as client_email, u.phone as client_phone
+      c.partner_one, c.partner_two, u.email as client_email, u.phone as client_phone, u.status as client_status
     from weddings w join markets m on m.id = w.market_id left join bookings b on b.wedding_id = w.id left join packages p on p.id = b.package_id
       left join clients c on c.id = w.client_id left join users u on u.id = c.user_id where w.id = ${weddingId}`;
   if (!w) return null;

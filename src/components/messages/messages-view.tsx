@@ -3,10 +3,10 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, PenSquare, Paperclip, Send, ArrowLeft, MessageCircle, FileText, Users, Heart, LifeBuoy, X, Loader2, CheckCheck } from "lucide-react";
+import { Search, PenSquare, Paperclip, Send, ArrowLeft, MessageCircle, FileText, Users, Heart, LifeBuoy, X, Loader2, CheckCheck, UserPlus, UserMinus } from "lucide-react";
 import { Avatar, AvatarStack, Button, Input, Textarea, Field, Select, EmptyState, Badge } from "@/components/ui";
 import { Modal, useAction, useToast } from "@/components/ui/interactive";
-import { sendMessageAction, startConversationAction } from "@/lib/actions/team";
+import { sendMessageAction, startConversationAction, addParticipantsAction, removeParticipantAction } from "@/lib/actions/team";
 import { uploadFile } from "@/lib/client-upload";
 import { cn, chatTime, fmtDate, bytes } from "@/lib/utils";
 
@@ -17,8 +17,8 @@ const roleLabel: Record<string, string> = { coordinator: "Coordinator", photogra
 const kindIcon = { wedding: Heart, support: LifeBuoy, direct: MessageCircle } as Record<string, typeof Heart>;
 
 type Contact = { id: string; full_name: string; role: string; avatar_url: string | null };
-export function MessagesView({ me, convos, thread, weddings, contacts, isClient }: {
-  me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; isClient: boolean;
+export function MessagesView({ me, convos, thread, weddings, contacts, isClient, canManage = false }: {
+  me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; isClient: boolean; canManage?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -86,7 +86,7 @@ export function MessagesView({ me, convos, thread, weddings, contacts, isClient 
 
       {/* Thread */}
       <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden lg:flex")}>
-        {thread ? <ThreadPane me={me} thread={thread} onBack={() => router.push(pathname)} /> : (
+        {thread ? <ThreadPane me={me} thread={thread} canManage={canManage} contacts={contacts} onBack={() => router.push(pathname)} /> : (
           <div className="grid flex-1 place-items-center">
             <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins, photographers and videographers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
           </div>
@@ -99,7 +99,8 @@ export function MessagesView({ me, convos, thread, weddings, contacts, isClient 
   );
 }
 
-function ThreadPane({ me, thread, onBack }: { me: string; thread: Thread; onBack: () => void }) {
+function ThreadPane({ me, thread, onBack, canManage, contacts }: { me: string; thread: Thread; onBack: () => void; canManage: boolean; contacts: Contact[] }) {
+  const [people, setPeople] = React.useState(false);
   const router = useRouter();
   const toast = useToast();
   const [body, setBody] = React.useState("");
@@ -152,7 +153,9 @@ function ThreadPane({ me, thread, onBack }: { me: string; thread: Thread; onBack
         </div>
         {thread.couple && <Badge tone="blush" className="hidden sm:inline-flex"><Heart className="size-3" />{thread.couple}{thread.wedding_date ? ` · ${fmtDate(thread.wedding_date, "MMM d")}` : ""}</Badge>}
         <AvatarStack people={others.map((p) => ({ name: p.full_name, src: p.avatar_url }))} size={30} />
+        {canManage && <Button variant="outline" size="sm" icon={UserPlus} onClick={() => setPeople(true)} aria-label="Add or remove people"><span className="hidden sm:inline">People</span></Button>}
       </header>
+      {canManage && <PeopleModal open={people} onClose={() => setPeople(false)} me={me} thread={thread} contacts={contacts} />}
       <div className="flex-1 space-y-1 overflow-y-auto bg-canvas/40 px-4 py-5 scrollbar-thin sm:px-6" aria-live="polite">
         {messages.map((m, i) => {
           const mine = m.sender_id === me;
@@ -282,6 +285,74 @@ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: {
         )}
         <Field label="Subject" error={errors.subject}><Input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="What's this about?" aria-invalid={!!errors.subject} /></Field>
         <Field label="Message" error={errors.body}><Textarea value={body} onChange={(e) => setBody(e.target.value)} className="min-h-[120px]" aria-invalid={!!errors.body} /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+function PeopleModal({ open, onClose, me, thread, contacts }: { open: boolean; onClose: () => void; me: string; thread: Thread; contacts: Contact[] }) {
+  const router = useRouter();
+  const { run, pending } = useAction();
+  const [pick, setPick] = React.useState<string[]>([]);
+  const [q, setQ] = React.useState("");
+  const [removing, setRemoving] = React.useState<string | null>(null);
+  React.useEffect(() => { if (!open) { setPick([]); setQ(""); } }, [open]);
+  const inThread = new Set(thread.participants.map((p) => p.id));
+  const hasClient = thread.participants.some((p) => p.role === "client");
+  const available = contacts.filter((c) => !inThread.has(c.id) && c.role !== "client" && (!q || c.full_name.toLowerCase().includes(q.toLowerCase())));
+  const toggle = (id: string) => setPick((t) => (t.includes(id) ? t.filter((x) => x !== id) : [...t, id]));
+  const add = () => run(() => addParticipantsAction(thread.id, pick), { onSuccess: () => { setPick([]); router.refresh(); onClose(); } });
+  const remove = (id: string) => { setRemoving(id); run(() => removeParticipantAction(thread.id, id), { onSuccess: () => router.refresh() }); };
+  React.useEffect(() => { if (!pending) setRemoving(null); }, [pending]);
+  return (
+    <Modal open={open} onClose={onClose} title="People in this conversation"
+      description={hasClient ? "Loop in the photographer or videographer when the couple needs them. They'll see the whole conversation and can reply here, but can't start new conversations with the couple." : "Add or remove coordinators, admins, photographers and videographers."}
+      footer={<><Button variant="outline" onClick={onClose}>Done</Button><Button icon={UserPlus} loading={pending && !removing} disabled={!pick.length} onClick={add}>{pick.length > 1 ? `Add ${pick.length} people` : "Add"}</Button></>}>
+      <div className="space-y-5">
+        <div>
+          <p className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-muted">In the conversation</p>
+          <ul className="divide-y divide-line rounded-2xl border border-line">
+            {thread.participants.map((p) => (
+              <li key={p.id} className="flex items-center gap-3 px-3 py-2">
+                <Avatar name={p.full_name} src={p.avatar_url} size={30} />
+                <span className="min-w-0 flex-1 truncate text-sm text-ink">{p.full_name}{p.id === me ? " (you)" : ""}</span>
+                <span className="text-[11px] text-muted">{roleLabel[p.role] ?? p.role}</span>
+                {p.id !== me && p.role !== "client" && (
+                  <Button variant="ghost" size="sm" icon={UserMinus} loading={removing === p.id} disabled={pending} onClick={() => remove(p.id)} aria-label={`Remove ${p.full_name}`}><span className="hidden sm:inline">Remove</span></Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <Field label="Add people">
+          <div className="rounded-2xl border border-line">
+            {pick.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 border-b border-line p-2">
+                {pick.map((id) => { const c = contacts.find((x) => x.id === id); return c ? <button key={id} type="button" onClick={() => toggle(id)} className="inline-flex items-center gap-1 rounded-full bg-midnight-900 px-2.5 py-1 text-[12px] text-white" aria-label={`Unselect ${c.full_name}`}>{c.full_name}<X className="size-3" /></button> : null; })}
+              </div>
+            )}
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search people" aria-label="Search people to add" className="h-10 rounded-none border-0 focus:ring-0" />
+            <div className="max-h-48 overflow-y-auto border-t border-line p-1.5 scrollbar-thin">
+              {ROLE_GROUP.map(([label, roles]) => {
+                const list = available.filter((c) => roles.includes(c.role));
+                if (!list.length) return null;
+                return (
+                  <div key={label}>
+                    <p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{label}</p>
+                    {list.map((c) => (
+                      <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
+                        <input type="checkbox" className="size-4 accent-midnight-900" checked={pick.includes(c.id)} onChange={() => toggle(c.id)} />
+                        <span className="flex-1 truncate text-ink">{c.full_name}</span>
+                        <span className="text-[11px] capitalize text-muted">{c.role}</span>
+                      </label>
+                    ))}
+                  </div>
+                );
+              })}
+              {available.length === 0 && <p className="px-2 py-3 text-[13px] text-muted">{q ? "Nobody matches." : "Everyone is already here."}</p>}
+            </div>
+          </div>
+        </Field>
       </div>
     </Modal>
   );

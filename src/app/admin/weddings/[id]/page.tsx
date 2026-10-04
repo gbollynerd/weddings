@@ -9,18 +9,21 @@ import { weddingPlaces, placeLine } from "@/lib/venues";
 import { money } from "@/lib/pricing";
 import { fmtLong, fmtTime, daysUntil } from "@/lib/utils";
 import { StaffingBoard } from "./staffing";
+import { ClientMessages } from "./client-messages";
+import { clientThreadsForWedding } from "@/lib/services/messages";
 
 export const metadata = { title: "Wedding" };
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
 
 export default async function AdminWeddingPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireUser(["coordinator", "admin"]);
+  const me = await requireUser(["coordinator", "admin"]);
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
   const data = await adminWedding(id);
   if (!data) notFound();
   const { wedding: w, slots, changes, contracts, cancellations } = data;
   const d = daysUntil(w.wedding_date);
+  const threads = w.client_email ? await clientThreadsForWedding(id, me.id) : [];
   const places = weddingPlaces(w as never);
   const changeRows = await Promise.all(changes.map(async (c) => ({
     ...c, couple: w.couple, booking_number: w.booking_number, created_at: iso(c.created_at), decided_at: iso(c.decided_at),
@@ -50,10 +53,14 @@ export default async function AdminWeddingPage({ params }: { params: Promise<{ i
             </div>
           </div>
           {w.client_email && (
-            <div className="shrink-0 space-y-1 rounded-2xl bg-canvas p-4 text-[13px]">
+            <div className="w-full shrink-0 space-y-1 rounded-2xl bg-canvas p-4 text-[13px] md:w-72">
               <p className="font-medium text-ink">{w.partner_one} &amp; {w.partner_two}</p>
               <a href={`mailto:${w.client_email}`} className="flex items-center gap-1.5 text-midnight-600 hover:underline"><Mail className="size-3.5" />{w.client_email}</a>
               {w.client_phone && <a href={`tel:${w.client_phone}`} className="flex items-center gap-1.5 text-midnight-600 hover:underline"><Phone className="size-3.5" />{w.client_phone}</a>}
+              <div className="pt-2">
+                <ClientMessages weddingId={id} couple={w.couple} firstName={(w.partner_one ?? "").split(" ")[0] || "there"} canMessage={w.client_status === "active"}
+                  threads={threads.map((t) => ({ ...t, last_message_at: new Date(t.last_message_at).toISOString() }))} />
+              </div>
             </div>
           )}
         </div>

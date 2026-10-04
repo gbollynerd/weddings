@@ -540,6 +540,11 @@ alter table wedding_change_requests add column if not exists before jsonb;
 
 -- ───────────────────────── Messaging rule ─────────────────────────
 -- Clients talk to coordinators/admins only: remove any photographer/videographer from threads a client is in.
+-- Runs once per database (this file re-runs on every build): afterwards coordinators may deliberately add them to a client thread.
+create table if not exists app_flags (key text primary key, set_at timestamptz not null default now());
+alter table app_flags enable row level security;
 delete from conversation_participants p using users u
 where u.id = p.user_id and u.role in ('photographer','videographer')
-  and exists (select 1 from conversation_participants p2 join users c on c.id = p2.user_id where p2.conversation_id = p.conversation_id and c.role = 'client');
+  and exists (select 1 from conversation_participants p2 join users c on c.id = p2.user_id where p2.conversation_id = p.conversation_id and c.role = 'client')
+  and not exists (select 1 from app_flags where key = 'client_thread_cleanup_v1');
+insert into app_flags (key) values ('client_thread_cleanup_v1') on conflict do nothing;
