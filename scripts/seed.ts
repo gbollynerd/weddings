@@ -339,6 +339,16 @@ async function main() {
   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "ceremony", "A-CAM_Ceremony_Wide.MP4", 18.4 * 1024 * MB, "ready", { dur: 2410, ago: -5 });
   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "reception", "B-CAM_Toasts.MP4", 9.7 * 1024 * MB, "processing", { dur: 1530, ago: -4 });
   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "footage", "GIMBAL_Portraits_001.MP4", 4.1 * 1024 * MB, "ready", { dur: 612, ago: -5 });
+  await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "audio", "LAV_Officiant_Ceremony.WAV", 412 * MB, "uploaded", { dur: 2380, ago: -5 });
+  // Footage tags (moment + camera) and a few markers, as the upload screen records them
+  for (const [file, moment, source] of [["A-CAM_Ceremony_Wide.MP4", "ceremony", "a_cam"], ["B-CAM_Toasts.MP4", "toasts", "b_cam"], ["GIMBAL_Portraits_001.MP4", "portraits", "a_cam"], ["LAV_Officiant_Ceremony.WAV", "ceremony", "audio_officiant"]])
+    await sql`update uploads set moment = ${moment}, source = ${source}, category = ${source.startsWith("audio_") ? "audio" : "footage"}, camera_markers = ${file.startsWith("A-CAM")} where filename = ${file}`;
+  await sql`update uploads set moment = 'mixed', source = 'body_1' where kind = 'photo' and wedding_id = ${weddingIds.rachel}`;
+  const [cer] = await sql`select id from uploads where filename = 'A-CAM_Ceremony_Wide.MP4'`;
+  for (const [at, beat, note] of [[95, "processional", null], [742, "vows", "Both read their own vows"], [1105, "rings", null], [1190, "kiss", null], [1260, "recessional", null]] as const)
+    await sql`insert into upload_markers (upload_id, at_seconds, beat, note, created_by) values (${cer.id}, ${at}, ${beat}, ${note}, ${tm.daniel.user})`;
+  // Marcus has accepted the team standards; Daniel hasn't yet (shows the reminder)
+  await sql`insert into standards_acknowledgments (team_member_id, version, signer_name, signed_at, ip) values (${tm.marcus.id}, 1, 'Marcus Johnson', ${ts(-3)}, 'seed')`;
   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "footage", "DRONE_Venue.MP4", 2.2 * 1024 * MB, "failed", { dur: 304, err: "Upload timed out after 3 attempts", ago: -4 });
   await up("lauren", "lauren:lead_video", tm.daniel.user, "video", "footage", "Lauren-Josh_Highlight_FINAL.mp4", 1.3 * 1024 * MB, "ready", { dur: 356, ago: -15 });
   // Client-visible deliverables

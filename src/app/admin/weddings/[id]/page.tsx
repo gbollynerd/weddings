@@ -11,6 +11,9 @@ import { fmtLong, fmtTime, daysUntil } from "@/lib/utils";
 import { StaffingBoard } from "./staffing";
 import { ClientMessages } from "./client-messages";
 import { clientThreadsForWedding } from "@/lib/services/messages";
+import { footageForWedding } from "@/lib/services/uploads";
+import { storage } from "@/lib/storage";
+import { FootagePanel } from "./footage";
 
 export const metadata = { title: "Wedding" };
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
@@ -23,7 +26,8 @@ export default async function AdminWeddingPage({ params }: { params: Promise<{ i
   if (!data) notFound();
   const { wedding: w, slots, changes, contracts, cancellations } = data;
   const d = daysUntil(w.wedding_date);
-  const threads = w.client_email ? await clientThreadsForWedding(id, me.id) : [];
+  const [threads, footage] = await Promise.all([w.client_email ? clientThreadsForWedding(id, me.id) : Promise.resolve([]), footageForWedding(id)]);
+  const store = storage();
   const places = weddingPlaces(w as never);
   const changeRows = await Promise.all(changes.map(async (c) => ({
     ...c, couple: w.couple, booking_number: w.booking_number, created_at: iso(c.created_at), decided_at: iso(c.decided_at),
@@ -74,6 +78,9 @@ export default async function AdminWeddingPage({ params }: { params: Promise<{ i
         contracts={contracts.map((c) => ({ ...c, signed_at: iso(c.signed_at) })) as never}
         cancellations={cancellations.map((c) => ({ ...c, requested_at: iso(c.requested_at), decided_at: iso(c.decided_at) })) as never}
       />
+
+      <FootagePanel providerLabel={store.label}
+        rows={footage.map((f) => ({ ...f, size_bytes: Number(f.size_bytes), created_at: undefined, downloadable: f.storage_provider === store.name && store.name !== "mock" })) as never} />
 
       <Card>
         <CardHeader title="Wedding details" />

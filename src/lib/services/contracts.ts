@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { sql } from "@/lib/db";
-import { DEFAULT_CONTRACT } from "@/content/contract";
+import { DEFAULT_CONTRACT, LEGACY_CONTRACT_SHA, STANDARDS_ADDENDUM } from "@/content/contract";
 import { weddingPlaces, placeLine } from "@/lib/venues";
 
 type Db = typeof sql;
@@ -9,11 +9,36 @@ export { COMPANY } from "@/lib/contract-fill";
 
 export type Template = { id: string; version: number; title: string; body: string; change_note: string | null; created_at: Date; created_by_name: string | null };
 
+const UPGRADE_FLAG = "contract_standards_v2";
+let upgradeChecked = false;
+
+/**
+ * One-time upgrade that adds the shooting standard, backup, insurance and liability terms. If the live agreement
+ * is still the original built-in text it's replaced with the new default; if a coordinator edited it, the new
+ * terms are appended as an addendum so their wording is kept. Either way it's a new version, so earlier
+ * signatures stay exactly as signed and everyone signs the new terms on their next wedding.
+ */
+async function upgradeTemplate(db: Db, cur: Template) {
+  if (upgradeChecked) return null;
+  const claimed = await db`insert into app_flags (key) values (${UPGRADE_FLAG}) on conflict do nothing returning key`;
+  upgradeChecked = true;
+  if (!claimed.length) return null;
+  if (cur.body.includes("## Addendum — shooting standard") || cur.body.includes("## 10. Equipment, damage and liability")) return null;
+  const legacy = createHash("sha256").update(cur.body).digest("hex") === LEGACY_CONTRACT_SHA;
+  const body = legacy ? DEFAULT_CONTRACT.body : `${cur.body.trimEnd()}\n\n${STANDARDS_ADDENDUM}`;
+  const note = legacy ? "Added shooting standard, backups, insurance and liability terms" : "Added addendum: shooting standard, backups, insurance and liability";
+  await db`insert into contract_templates (version, title, body, change_note) values (${cur.version + 1}, ${cur.title}, ${body}, ${note}) on conflict (version) do nothing`;
+  const [t] = await db<Template[]>`select t.*, u.full_name as created_by_name from contract_templates t left join users u on u.id = t.created_by order by version desc limit 1`;
+  return t;
+}
+
 /** Current contract version; creates version 1 from the built-in draft the first time. */
 export async function activeTemplate(db: Db = sql): Promise<Template> {
   const [t] = await db<Template[]>`select t.*, u.full_name as created_by_name from contract_templates t left join users u on u.id = t.created_by order by version desc limit 1`;
-  if (t) return t;
+  if (t) return (await upgradeTemplate(db, t)) ?? t;
   await db`insert into contract_templates (version, title, body, change_note) values (1, ${DEFAULT_CONTRACT.title}, ${DEFAULT_CONTRACT.body}, 'Initial version') on conflict (version) do nothing`;
+  await db`insert into app_flags (key) values (${UPGRADE_FLAG}) on conflict do nothing`;
+  upgradeChecked = true;
   const [t1] = await db<Template[]>`select t.*, null as created_by_name from contract_templates t order by version desc limit 1`;
   return t1;
 }

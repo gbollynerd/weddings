@@ -270,6 +270,7 @@ function AssignModal({ state, onClose, onDone }: { state: { slot: Slot; release:
                         <Badge><Navigation className="size-3" />{milesLabel(c.distance)}</Badge>
                         {c.blocked ? <Badge tone="danger">{c.blocked}</Badge> : c.calendar === "available" ? <Badge tone="success">Available</Badge> : <Badge>Calendar not set</Badge>}
                         {!c.docs_ok && <Badge tone="warning">Docs missing</Badge>}
+                        {!c.standards_ok && <Badge tone="warning">Standards not accepted</Badge>}
                         {c.late_cancels > 0 && <Badge tone="danger">{c.late_cancels} late cancel{c.late_cancels > 1 ? "s" : ""}</Badge>}
                       </span>
                     </span>

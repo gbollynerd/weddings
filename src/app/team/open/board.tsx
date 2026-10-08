@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarDays, Clock, MapPin, Camera, Video, Navigation, CircleDollarSign, Users, AlertTriangle, CheckCircle2, Search, SlidersHorizontal,
-  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route,
+  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert,
 } from "lucide-react";
 import { Button, ButtonLink, StatusBadge, Badge, Select, Input, EmptyState, Alert, Field, Textarea } from "@/components/ui";
 import { Modal, Tabs, useAction, useToast } from "@/components/ui/interactive";
@@ -19,7 +19,7 @@ import type { Opportunity } from "@/lib/services/team";
 type Item = Omit<Opportunity, "expires_at"> & { expires_at: string | null };
 type Tab = "offered" | "available" | "pending" | "accepted" | "closed" | "declined";
 
-export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string }) {
+export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const { run, pending } = useAction();
@@ -65,6 +65,12 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
   const activeFilters = [service !== discipline, role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
   const reset = () => { setService(discipline); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
 
+  // The team standards must be accepted before signing for any wedding.
+  const startSign = (i: Item) => {
+    if (standardsAccepted) { setConfirm(i); return; }
+    toast({ tone: "info", title: "Accept the team standards first", body: "It takes a couple of minutes, then you can sign for this wedding." });
+    router.push("/team/standards");
+  };
   const doDeclineOffer = (i: Item) => run(() => declineOfferAction(i.id, declineNote ? `${declineReason} — ${declineNote}` : declineReason), {
     onSuccess: () => { setDeclineOffer(null); setDetail(null); setDeclineNote(""); router.refresh(); },
   });
@@ -74,6 +80,12 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
 
   return (
     <div>
+      {!standardsAccepted && (
+        <Alert tone="danger" icon={ShieldAlert} className="mb-4" title="Accept the team standards to take weddings"
+          action={<ButtonLink href="/team/standards" size="sm">Review &amp; accept</ButtonLink>}>
+          Our shooting standard, footage tagging, backup rules, insurance and liability terms are now required for every wedding.
+        </Alert>
+      )}
       <Alert tone="blush" icon={Info} className="mb-6">
         To accept a wedding you&apos;ll sign our contractor agreement for that date, then a coordinator reviews and confirms you — it stays under <b>Pending</b> until then. Make sure the date is <Link href="/team/availability" className="font-semibold underline">marked available</Link> first. Distances are straight-line from {homeLabel}.
       </Alert>
@@ -123,7 +135,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
       ) : (
         <div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
           {filtered.map((i) => (
-            <OpportunityCard key={i.id} item={i} onView={() => setDetail(i)} onAccept={() => setConfirm(i)} onDecline={() => i.view_status === "offered" ? setDeclineOffer(i) : setDecline(i)}
+            <OpportunityCard key={i.id} item={i} onView={() => setDetail(i)} onAccept={() => startSign(i)} onDecline={() => i.view_status === "offered" ? setDeclineOffer(i) : setDecline(i)}
               onUndo={() => run(() => undoDeclineAction(i.id), { onSuccess: () => router.refresh() })}
               onWithdraw={() => run(() => withdrawRequestAction(i.id), { onSuccess: () => router.refresh() })} pending={pending} />
           ))}
@@ -136,7 +148,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
         footer={detail && (detail.view_status === "available" || detail.view_status === "offered") ? (
           <>
             <Button variant="outline" icon={XCircle} onClick={() => detail.view_status === "offered" ? setDeclineOffer(detail) : setDecline(detail)}>{detail.view_status === "offered" ? "Decline offer" : "Decline"}</Button>
-            <Button icon={FileSignature} onClick={() => setConfirm(detail)} disabled={!detail.eligible || detail.conflict || (!!detail.calendar && detail.calendar !== "available")}>Review &amp; sign</Button>
+            <Button icon={FileSignature} onClick={() => startSign(detail)} disabled={!detail.eligible || detail.conflict || (!!detail.calendar && detail.calendar !== "available")}>Review &amp; sign</Button>
           </>
         ) : <Button variant="outline" onClick={() => setDetail(null)}>Close</Button>}>
         {detail && <DetailBody item={detail} homeLabel={homeLabel} />}
@@ -146,7 +158,11 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
       <SignContractModal assignmentId={confirm?.id ?? null} open={!!confirm} onClose={() => setConfirm(null)} memberName={memberName}
         title={confirm?.view_status === "offered" ? "Sign to confirm this wedding" : "Sign to request this wedding"}
         signLabel={confirm?.view_status === "offered" ? "Sign & confirm" : "Sign & send request"}
-        sign={(sig) => acceptOpportunityAction(confirm!.id, sig)}
+        sign={async (sig) => {
+          const r = await acceptOpportunityAction(confirm!.id, sig);
+          if (!r.ok && r.data?.needsStandards) { setConfirm(null); router.push("/team/standards"); }
+          return r;
+        }}
         onSigned={(d) => { const i = confirm!; setConfirm(null); setDetail(null); if (d) setSuccess({ item: i, status: d.status, weddingId: d.weddingId }); router.refresh(); }}
         summary={confirm && (
           <div className="rounded-2xl bg-canvas p-4 text-sm">

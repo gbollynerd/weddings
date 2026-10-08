@@ -3,6 +3,7 @@ import { sql, num } from "@/lib/db";
 import { notify } from "./notifications";
 import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
 import { activeTemplate, contractContext, recordSignature, voidContracts, normName, fillTemplate } from "./contracts";
+import { standardsAcceptance, STANDARDS_REQUIRED_MESSAGE } from "./standards";
 
 export type Member = {
   id: string; user_id: string; discipline: "photo" | "video"; bio: string | null; home_market_id: string | null;
@@ -151,6 +152,7 @@ export type Signature = { name: string; agree: boolean; version: number; ip: str
  */
 export async function acceptOpportunity(member: Member, assignmentId: string, sig: Signature) {
   if (member.status !== "active") return { ok: false as const, message: "Your account needs to be approved before you can take weddings." };
+  if (!(await standardsAcceptance(member.id))) return { ok: false as const, message: STANDARDS_REQUIRED_MESSAGE, needsStandards: true };
   if (!sig.agree) return { ok: false as const, message: "Please confirm you agree to the terms." };
   if (normName(sig.name) !== normName(member.full_name)) return { ok: false as const, message: `Type your full name exactly as it appears on your profile (${member.full_name}).`, field: "name" };
   return sql.begin(async (tx) => {
@@ -414,6 +416,8 @@ export async function submitLicense(member: Member, input: { docType: string; la
 const fmtShort = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
 export async function actionItems(member: Member) {
   const items: { id: string; title: string; detail: string; href: string; tone: "danger" | "warning" | "info" | "blush"; cta: string; assignmentId?: string }[] = [];
+  if (!(await standardsAcceptance(member.id)))
+    items.push({ id: "standards", title: "Accept the team standards", detail: "Shooting standard, footage tagging, backups, insurance and liability — required before you can take weddings.", href: "/team/standards", tone: "danger", cta: "Review" });
   const lic = await licenses(member.id);
   for (const d of REQUIRED_DOCS.filter((x) => x.required)) {
     const docs = lic.filter((l) => l.doc_type === d.type);

@@ -548,3 +548,41 @@ where u.id = p.user_id and u.role in ('photographer','videographer')
   and exists (select 1 from conversation_participants p2 join users c on c.id = p2.user_id where p2.conversation_id = p.conversation_id and c.role = 'client')
   and not exists (select 1 from app_flags where key = 'client_thread_cleanup_v1');
 insert into app_flags (key) values ('client_thread_cleanup_v1') on conflict do nothing;
+
+-- ───────────────────────── Footage tagging + Dropbox storage ─────────────────────────
+-- Each upload carries the wedding moment it covers and the camera/recorder it came from, so editors
+-- (and the editing pipeline) can find "B-cam, toasts" without opening files.
+alter table uploads add column if not exists moment text;
+alter table uploads add column if not exists source text;
+alter table uploads add column if not exists camera_markers boolean not null default false;
+alter table uploads add column if not exists storage_provider text;
+alter table uploads add column if not exists verified_at timestamptz;
+create index if not exists uploads_wedding_moment_idx on uploads(wedding_id, moment);
+
+-- Timecode markers a shooter adds inside a clip (e.g. vows at 12:31 in the ceremony A-cam file).
+create table if not exists upload_markers (
+  id          uuid primary key default gen_random_uuid(),
+  upload_id   uuid not null references uploads(id) on delete cascade,
+  at_seconds  int not null check (at_seconds >= 0),
+  beat        text not null,
+  note        text,
+  created_by  uuid references users(id) on delete set null,
+  created_at  timestamptz not null default now()
+);
+create index if not exists upload_markers_upload_idx on upload_markers(upload_id, at_seconds);
+alter table upload_markers enable row level security;
+
+-- ───────────────────────── Team standards acknowledgment ─────────────────────────
+-- Team members must accept the current shooting/backup/insurance standards before taking weddings.
+-- Bumping STANDARDS_VERSION in src/content/standards.ts asks everyone to accept again.
+create table if not exists standards_acknowledgments (
+  id              uuid primary key default gen_random_uuid(),
+  team_member_id  uuid not null references team_members(id) on delete cascade,
+  version         int not null,
+  signer_name     text not null,
+  signed_at       timestamptz not null default now(),
+  ip              text,
+  user_agent      text,
+  unique (team_member_id, version)
+);
+alter table standards_acknowledgments enable row level security;

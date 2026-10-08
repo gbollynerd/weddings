@@ -1,8 +1,12 @@
 "use client";
 
 import { beginUploadAction, finishUploadAction } from "@/lib/actions/team";
+import { sendXhr, dropboxSessionUpload } from "@/lib/dropbox-upload";
 
-export type UploadMeta = { weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null };
+export type UploadMeta = {
+  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null;
+  moment?: string | null; source?: string | null; cameraMarkers?: boolean;
+};
 export type UploadHandle = { id: string | null; promise: Promise<{ ok: boolean; id: string | null; error?: string; key?: string }>; cancel: () => void };
 
 /** Reads a video's duration in the browser (best effort). */
@@ -20,8 +24,9 @@ export function videoDuration(file: File): Promise<number | null> {
 }
 
 /**
- * Uploads one file: asks the server for a target, then either PUTs to signed storage (real progress)
- * or simulates the transfer when the mock storage provider is active.
+ * Uploads one file: asks the server for a target, then sends it straight to storage — a signed PUT
+ * (Supabase), a Dropbox temporary upload link (≤140 MB) or a chunked Dropbox upload session (bigger
+ * files) — or simulates the transfer when the mock storage provider is active.
  */
 export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: number) => void, onId?: (id: string) => void): UploadHandle {
   let cancelled = false;
@@ -36,18 +41,13 @@ export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: numbe
     onId?.(begin.id);
     const durationP = meta.kind === "video" ? videoDuration(file) : Promise.resolve(null);
     let result: { ok: boolean; error?: string };
-    if (begin.target.mode === "put") {
-      const target = begin.target;
-      result = await new Promise((resolve) => {
-        xhr = new XMLHttpRequest();
-        xhr.open("PUT", target.url);
-        Object.entries(target.headers).forEach(([k, v]) => xhr!.setRequestHeader(k, v));
-        xhr.upload.onprogress = (e) => e.lengthComputable && onProgress((e.loaded / e.total) * 100);
-        xhr.onload = () => resolve(xhr!.status < 300 ? { ok: true } : { ok: false, error: `Storage rejected the file (${xhr!.status})` });
-        xhr.onerror = () => resolve({ ok: false, error: "Network error — check your connection" });
-        xhr.onabort = () => resolve({ ok: false, error: "Upload cancelled" });
-        xhr.send(file);
-      });
+    const target = begin.target;
+    if (target.mode === "put" || target.mode === "post") {
+      const r = await sendXhr(target.mode === "put" ? "PUT" : "POST", target.url, target.headers, file, (loaded) => onProgress((loaded / Math.max(1, file.size)) * 100), (x) => { xhr = x; });
+      result = r.status === 0 ? { ok: false, error: r.aborted ? "Upload cancelled" : "Network error — check your connection" }
+        : r.status < 300 ? { ok: true } : { ok: false, error: `Storage rejected the file (${r.status})` };
+    } else if (target.mode === "dropbox-session") {
+      result = await dropboxSessionUpload(file, target, onProgress, (x) => { xhr = x; }, () => cancelled);
     } else {
       // Demo storage: simulate a realistic transfer speed (~25–60 MB/s, capped so demos stay snappy).
       const seconds = Math.min(meta.kind === "video" ? 9 : 4, Math.max(0.8, file.size / (40 * 1024 * 1024)));
@@ -66,8 +66,11 @@ export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: numbe
       });
     }
     const durationSeconds = await durationP;
-    await finishUploadAction(begin.id, { ok: result.ok, error: result.error, durationSeconds });
-    return { ok: result.ok, id: begin.id, error: result.error, key: begin.key };
+    // The server double-checks the file landed at full size before marking it uploaded.
+    const fin = await finishUploadAction(begin.id, { ok: result.ok, error: result.error, durationSeconds });
+    const ok = result.ok && fin.ok;
+    return { ok, id: begin.id, error: ok ? undefined : result.error ?? fin.error ?? "Upload failed", key: begin.key };
   })().catch((e) => ({ ok: false, id: handle.id, error: e instanceof Error ? e.message : "Upload failed" }));
   return handle;
 }
+

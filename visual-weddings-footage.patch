@@ -1,0 +1,2250 @@
+diff --git a/.env.example b/.env.example
+index d00cd9e..2f316c6 100644
+--- a/.env.example
++++ b/.env.example
+@@ -6,3 +6,9 @@ AUTH_SECRET=change-me-to-a-long-random-string
+ SUPABASE_URL=
+ SUPABASE_SERVICE_ROLE_KEY=
+ SUPABASE_STORAGE_BUCKET=visual-weddings
++# Optional — store uploads in the company Dropbox instead (takes priority over Supabase Storage).
++# Create an app at dropbox.com/developers/apps (Scoped access, App folder), then run scripts/dropbox-auth.ts.
++DROPBOX_APP_KEY=
++DROPBOX_APP_SECRET=
++DROPBOX_REFRESH_TOKEN=
++DROPBOX_ROOT=/Weddings
+diff --git a/db/schema.sql b/db/schema.sql
+index a967481..647ab9c 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -548,3 +548,41 @@ where u.id = p.user_id and u.role in ('photographer','videographer')
+   and exists (select 1 from conversation_participants p2 join users c on c.id = p2.user_id where p2.conversation_id = p.conversation_id and c.role = 'client')
+   and not exists (select 1 from app_flags where key = 'client_thread_cleanup_v1');
+ insert into app_flags (key) values ('client_thread_cleanup_v1') on conflict do nothing;
++
++-- ───────────────────────── Footage tagging + Dropbox storage ─────────────────────────
++-- Each upload carries the wedding moment it covers and the camera/recorder it came from, so editors
++-- (and the editing pipeline) can find "B-cam, toasts" without opening files.
++alter table uploads add column if not exists moment text;
++alter table uploads add column if not exists source text;
++alter table uploads add column if not exists camera_markers boolean not null default false;
++alter table uploads add column if not exists storage_provider text;
++alter table uploads add column if not exists verified_at timestamptz;
++create index if not exists uploads_wedding_moment_idx on uploads(wedding_id, moment);
++
++-- Timecode markers a shooter adds inside a clip (e.g. vows at 12:31 in the ceremony A-cam file).
++create table if not exists upload_markers (
++  id          uuid primary key default gen_random_uuid(),
++  upload_id   uuid not null references uploads(id) on delete cascade,
++  at_seconds  int not null check (at_seconds >= 0),
++  beat        text not null,
++  note        text,
++  created_by  uuid references users(id) on delete set null,
++  created_at  timestamptz not null default now()
++);
++create index if not exists upload_markers_upload_idx on upload_markers(upload_id, at_seconds);
++alter table upload_markers enable row level security;
++
++-- ───────────────────────── Team standards acknowledgment ─────────────────────────
++-- Team members must accept the current shooting/backup/insurance standards before taking weddings.
++-- Bumping STANDARDS_VERSION in src/content/standards.ts asks everyone to accept again.
++create table if not exists standards_acknowledgments (
++  id              uuid primary key default gen_random_uuid(),
++  team_member_id  uuid not null references team_members(id) on delete cascade,
++  version         int not null,
++  signer_name     text not null,
++  signed_at       timestamptz not null default now(),
++  ip              text,
++  user_agent      text,
++  unique (team_member_id, version)
++);
++alter table standards_acknowledgments enable row level security;
+diff --git a/scripts/dropbox-auth.ts b/scripts/dropbox-auth.ts
+new file mode 100644
+index 0000000..6e6c963
+--- /dev/null
++++ b/scripts/dropbox-auth.ts
+@@ -0,0 +1,48 @@
++/*
++ * One-time Dropbox connection. Gets the long-lived refresh token the app uses to upload footage.
++ *
++ *   1. DROPBOX_APP_KEY=… DROPBOX_APP_SECRET=… npx tsx scripts/dropbox-auth.ts
++ *      → open the printed link while signed in to the COMPANY Dropbox account and click Allow.
++ *   2. DROPBOX_APP_KEY=… DROPBOX_APP_SECRET=… npx tsx scripts/dropbox-auth.ts <code shown by Dropbox>
++ *      → prints DROPBOX_REFRESH_TOKEN. Add all three values to Vercel → Settings → Environment Variables.
++ *
++ * The token is only printed to your terminal; never commit it.
++ */
++import { loadEnv } from "./env";
++
++loadEnv();
++const key = process.env.DROPBOX_APP_KEY;
++const secret = process.env.DROPBOX_APP_SECRET;
++if (!key || !secret) {
++  console.error("Set DROPBOX_APP_KEY and DROPBOX_APP_SECRET first (from dropbox.com/developers/apps → your app → Settings).");
++  process.exit(1);
++}
++const code = process.argv[2];
++
++async function main() {
++  if (!code) {
++    const url = new URL("https://www.dropbox.com/oauth2/authorize");
++    url.searchParams.set("client_id", key!);
++    url.searchParams.set("response_type", "code");
++    url.searchParams.set("token_access_type", "offline");
++    console.log("\n1. Sign in to the company Dropbox account, then open:\n\n   " + url.toString());
++    console.log("\n2. Click Allow, copy the code, and run this script again with the code as the last argument.\n");
++    return;
++  }
++  const res = await fetch("https://api.dropboxapi.com/oauth2/token", {
++    method: "POST",
++    headers: { "Content-Type": "application/x-www-form-urlencoded" },
++    body: new URLSearchParams({ code, grant_type: "authorization_code", client_id: key!, client_secret: secret! }),
++  });
++  const json = (await res.json()) as { refresh_token?: string; scope?: string; error_description?: string };
++  if (!res.ok || !json.refresh_token) {
++    console.error("Dropbox said:", json.error_description ?? res.status, "— codes expire after a few minutes; get a fresh one.");
++    process.exit(1);
++  }
++  const scopes = (json.scope ?? "").split(" ");
++  const missing = ["files.content.write", "files.content.read", "files.metadata.read", "files.metadata.write"].filter((s) => !scopes.includes(s));
++  console.log("\nDROPBOX_REFRESH_TOKEN=" + json.refresh_token + "\n");
++  if (missing.length) console.warn("⚠ The app is missing these permissions: " + missing.join(", ") + ". Enable them under Permissions, then repeat both steps.");
++  else console.log("✓ Permissions look right. Add DROPBOX_APP_KEY, DROPBOX_APP_SECRET and DROPBOX_REFRESH_TOKEN to Vercel, then redeploy.");
++}
++main();
+diff --git a/scripts/seed.ts b/scripts/seed.ts
+index b6c80ff..bea762e 100644
+--- a/scripts/seed.ts
++++ b/scripts/seed.ts
+@@ -339,6 +339,16 @@ async function main() {
+   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "ceremony", "A-CAM_Ceremony_Wide.MP4", 18.4 * 1024 * MB, "ready", { dur: 2410, ago: -5 });
+   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "reception", "B-CAM_Toasts.MP4", 9.7 * 1024 * MB, "processing", { dur: 1530, ago: -4 });
+   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "footage", "GIMBAL_Portraits_001.MP4", 4.1 * 1024 * MB, "ready", { dur: 612, ago: -5 });
++  await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "audio", "LAV_Officiant_Ceremony.WAV", 412 * MB, "uploaded", { dur: 2380, ago: -5 });
++  // Footage tags (moment + camera) and a few markers, as the upload screen records them
++  for (const [file, moment, source] of [["A-CAM_Ceremony_Wide.MP4", "ceremony", "a_cam"], ["B-CAM_Toasts.MP4", "toasts", "b_cam"], ["GIMBAL_Portraits_001.MP4", "portraits", "a_cam"], ["LAV_Officiant_Ceremony.WAV", "ceremony", "audio_officiant"]])
++    await sql`update uploads set moment = ${moment}, source = ${source}, category = ${source.startsWith("audio_") ? "audio" : "footage"}, camera_markers = ${file.startsWith("A-CAM")} where filename = ${file}`;
++  await sql`update uploads set moment = 'mixed', source = 'body_1' where kind = 'photo' and wedding_id = ${weddingIds.rachel}`;
++  const [cer] = await sql`select id from uploads where filename = 'A-CAM_Ceremony_Wide.MP4'`;
++  for (const [at, beat, note] of [[95, "processional", null], [742, "vows", "Both read their own vows"], [1105, "rings", null], [1190, "kiss", null], [1260, "recessional", null]] as const)
++    await sql`insert into upload_markers (upload_id, at_seconds, beat, note, created_by) values (${cer.id}, ${at}, ${beat}, ${note}, ${tm.daniel.user})`;
++  // Marcus has accepted the team standards; Daniel hasn't yet (shows the reminder)
++  await sql`insert into standards_acknowledgments (team_member_id, version, signer_name, signed_at, ip) values (${tm.marcus.id}, 1, 'Marcus Johnson', ${ts(-3)}, 'seed')`;
+   await up("rachel", "rachel:lead_video", tm.daniel.user, "video", "footage", "DRONE_Venue.MP4", 2.2 * 1024 * MB, "failed", { dur: 304, err: "Upload timed out after 3 attempts", ago: -4 });
+   await up("lauren", "lauren:lead_video", tm.daniel.user, "video", "footage", "Lauren-Josh_Highlight_FINAL.mp4", 1.3 * 1024 * MB, "ready", { dur: 356, ago: -15 });
+   // Client-visible deliverables
+diff --git a/scripts/setup-db.ts b/scripts/setup-db.ts
+index 5314ef3..447217d 100644
+--- a/scripts/setup-db.ts
++++ b/scripts/setup-db.ts
+@@ -4,6 +4,7 @@ import { join } from "node:path";
+ import { execSync } from "node:child_process";
+ import postgres from "postgres";
+ import { loadEnv } from "./env";
++import { syncHandbook } from "../src/lib/handbook-sync";
+ 
+ loadEnv();
+ async function main() {
+@@ -21,6 +22,10 @@ async function main() {
+       await sql.unsafe(readFileSync(join(process.cwd(), "db/schema.sql"), "utf8"));
+     }
+     const [{ n }] = await sql`select count(*)::int as n from users`;
++    if (n > 0) {
++      const h = await syncHandbook(sql);
++      if (h.added || h.refreshed) console.log(`◆ Handbook: ${h.added} new article(s), ${h.refreshed} refreshed`);
++    }
+     await sql.end();
+     if (n === 0 || process.env.RESEED === "1") {
+       console.log("◆ Seeding demo data…");
+diff --git a/src/app/admin/weddings/[id]/footage.tsx b/src/app/admin/weddings/[id]/footage.tsx
+new file mode 100644
+index 0000000..c8e6edb
+--- /dev/null
++++ b/src/app/admin/weddings/[id]/footage.tsx
+@@ -0,0 +1,96 @@
++"use client";
++import * as React from "react";
++import { useRouter } from "next/navigation";
++import { Film, Image as ImageIcon, Bookmark, Download, Tag, Mic, FolderOpen } from "lucide-react";
++import { Card, CardHeader, Badge, EmptyState, Select } from "@/components/ui";
++import { useAction } from "@/components/ui/interactive";
++import { MarkersModal, type Marker } from "@/components/uploads/markers-modal";
++import { retagUploadAction } from "@/lib/actions/footage";
++import { MOMENTS, MIXED, SOURCE_LABEL, momentLabel, isAudioSource } from "@/content/footage";
++import { bytes, duration, cn } from "@/lib/utils";
++
++type Row = {
++  id: string; kind: "photo" | "video"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
++  size_bytes: number; status: string; duration_seconds: number | null; uploader: string; markers: Marker[]; downloadable: boolean;
++};
++
++const ORDER = [...MOMENTS.map((m) => m.value), MIXED.value];
++
++/** Coordinator view of everything shot at a wedding, grouped by moment, with markers and download links. */
++export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLabel: string }) {
++  const router = useRouter();
++  const { run } = useAction();
++  const [markersFor, setMarkersFor] = React.useState<Row | null>(null);
++  const [kind, setKind] = React.useState<"all" | "photo" | "video">("all");
++
++  const shown = rows.filter((r) => kind === "all" || r.kind === kind);
++  const groups = new Map<string, Row[]>();
++  for (const r of shown) groups.set(r.moment ?? "", [...(groups.get(r.moment ?? "") ?? []), r]);
++  const keys = [...groups.keys()].sort((a, b) => (a === "" ? -1 : b === "" ? 1 : ORDER.indexOf(a) - ORDER.indexOf(b)));
++  const untagged = rows.filter((r) => r.kind === "video" && !r.moment).length;
++  const total = rows.reduce((s, r) => s + r.size_bytes, 0);
++  const markerCount = rows.reduce((s, r) => s + r.markers.length, 0);
++
++  return (
++    <Card className="overflow-hidden">
++      <CardHeader title="Footage & photos"
++        subtitle={rows.length ? `${rows.filter((r) => r.kind === "video").length} video/audio · ${rows.filter((r) => r.kind === "photo").length} photo files · ${bytes(total)} · ${markerCount} markers · ${providerLabel}` : providerLabel}
++        action={rows.length > 0 ? (
++          <div className="flex gap-1 rounded-full bg-midnight-50 p-1 text-[12px] font-medium">
++            {(["all", "video", "photo"] as const).map((k) => (
++              <button key={k} onClick={() => setKind(k)} className={cn("rounded-full px-3 py-1 capitalize", kind === k ? "bg-white text-ink shadow-sm" : "text-midnight-600")}>{k}</button>
++            ))}
++          </div>
++        ) : undefined} />
++      {rows.length === 0 ? (
++        <EmptyState icon={FolderOpen} title="Nothing uploaded yet" description="Files appear here as the team uploads them, grouped by moment." />
++      ) : (
++        <div className="divide-y divide-line">
++          {untagged > 0 && <p className="flex items-center gap-1.5 bg-warning-50 px-6 py-2.5 text-[13px] text-warning-700"><Tag className="size-4" />{untagged} video file{untagged > 1 ? "s" : ""} still need a moment tag — tag them below or ask the videographer.</p>}
++          {keys.map((k) => {
++            const list = groups.get(k)!;
++            return (
++              <section key={k || "untagged"} className="px-5 py-4 sm:px-6">
++                <div className="mb-2 flex flex-wrap items-center gap-2">
++                  <h3 className="font-semibold text-ink">{k ? momentLabel(k) : "Untagged"}</h3>
++                  <Badge>{list.length} file{list.length > 1 ? "s" : ""}</Badge>
++                  <span className="text-[12px] text-muted">{[...new Set(list.map((r) => (r.source ? SOURCE_LABEL[r.source] ?? r.source : null)).filter(Boolean))].join(" · ")}</span>
++                </div>
++                <ul className="space-y-1.5">
++                  {list.map((r) => (
++                    <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl px-2 py-1.5 text-[13px] hover:bg-canvas">
++                      <span className="flex min-w-0 flex-1 basis-56 items-center gap-2">
++                        {r.kind === "photo" ? <ImageIcon className="size-4 shrink-0 text-midnight-300" /> : isAudioSource(r.source) ? <Mic className="size-4 shrink-0 text-midnight-300" /> : <Film className="size-4 shrink-0 text-midnight-300" />}
++                        <span className="truncate font-medium text-ink">{r.filename}</span>
++                      </span>
++                      <span className="w-40 truncate text-muted">{r.uploader}{r.source ? ` · ${SOURCE_LABEL[r.source] ?? r.source}` : ""}</span>
++                      <span className="w-20 text-muted">{bytes(r.size_bytes)}</span>
++                      <span className="w-16 text-muted">{r.kind === "video" ? duration(r.duration_seconds) : ""}</span>
++                      <Select aria-label={`Moment for ${r.filename}`} value={r.moment ?? ""} className="h-8 w-40 text-[12px]"
++                        onChange={(e) => run(() => retagUploadAction(r.id, { moment: e.target.value }), { onSuccess: () => router.refresh() })}>
++                        {!r.moment && <option value="" disabled>Untagged</option>}
++                        {r.kind === "photo" && <option value={MIXED.value}>{MIXED.label}</option>}
++                        {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
++                      </Select>
++                      <span className="w-20">
++                        {r.kind === "video" && (
++                          <button onClick={() => setMarkersFor(r)} aria-label={`Markers for ${r.filename}`} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium text-midnight-700 ring-1 ring-line hover:bg-white">
++                            <Bookmark className="size-3.5" />{r.markers.length}{r.camera_markers && <span className="text-blush-600">+cam</span>}
++                          </button>
++                        )}
++                      </span>
++                      {r.downloadable
++                        ? <a href={`/api/uploads/${r.id}`} target="_blank" rel="noopener" className="grid size-8 place-items-center rounded-lg text-midnight-500 hover:bg-white hover:text-ink" aria-label={`Download ${r.filename}`}><Download className="size-4" /></a>
++                        : <span className="size-8" />}
++                    </li>
++                  ))}
++                </ul>
++              </section>
++            );
++          })}
++        </div>
++      )}
++      <MarkersModal open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
++    </Card>
++  );
++}
+diff --git a/src/app/admin/weddings/[id]/page.tsx b/src/app/admin/weddings/[id]/page.tsx
+index a4c1469..9789c3c 100644
+--- a/src/app/admin/weddings/[id]/page.tsx
++++ b/src/app/admin/weddings/[id]/page.tsx
+@@ -11,6 +11,9 @@ import { fmtLong, fmtTime, daysUntil } from "@/lib/utils";
+ import { StaffingBoard } from "./staffing";
+ import { ClientMessages } from "./client-messages";
+ import { clientThreadsForWedding } from "@/lib/services/messages";
++import { footageForWedding } from "@/lib/services/uploads";
++import { storage } from "@/lib/storage";
++import { FootagePanel } from "./footage";
+ 
+ export const metadata = { title: "Wedding" };
+ const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null);
+@@ -23,7 +26,8 @@ export default async function AdminWeddingPage({ params }: { params: Promise<{ i
+   if (!data) notFound();
+   const { wedding: w, slots, changes, contracts, cancellations } = data;
+   const d = daysUntil(w.wedding_date);
+-  const threads = w.client_email ? await clientThreadsForWedding(id, me.id) : [];
++  const [threads, footage] = await Promise.all([w.client_email ? clientThreadsForWedding(id, me.id) : Promise.resolve([]), footageForWedding(id)]);
++  const store = storage();
+   const places = weddingPlaces(w as never);
+   const changeRows = await Promise.all(changes.map(async (c) => ({
+     ...c, couple: w.couple, booking_number: w.booking_number, created_at: iso(c.created_at), decided_at: iso(c.decided_at),
+@@ -75,6 +79,9 @@ export default async function AdminWeddingPage({ params }: { params: Promise<{ i
+         cancellations={cancellations.map((c) => ({ ...c, requested_at: iso(c.requested_at), decided_at: iso(c.decided_at) })) as never}
+       />
+ 
++      <FootagePanel providerLabel={store.label}
++        rows={footage.map((f) => ({ ...f, size_bytes: Number(f.size_bytes), created_at: undefined, downloadable: f.storage_provider === store.name && store.name !== "mock" })) as never} />
++
+       <Card>
+         <CardHeader title="Wedding details" />
+         <CardBody>
+diff --git a/src/app/admin/weddings/[id]/staffing.tsx b/src/app/admin/weddings/[id]/staffing.tsx
+index f307d31..03674a9 100644
+--- a/src/app/admin/weddings/[id]/staffing.tsx
++++ b/src/app/admin/weddings/[id]/staffing.tsx
+@@ -270,6 +270,7 @@ function AssignModal({ state, onClose, onDone }: { state: { slot: Slot; release:
+                         <Badge><Navigation className="size-3" />{milesLabel(c.distance)}</Badge>
+                         {c.blocked ? <Badge tone="danger">{c.blocked}</Badge> : c.calendar === "available" ? <Badge tone="success">Available</Badge> : <Badge>Calendar not set</Badge>}
+                         {!c.docs_ok && <Badge tone="warning">Docs missing</Badge>}
++                        {!c.standards_ok && <Badge tone="warning">Standards not accepted</Badge>}
+                         {c.late_cancels > 0 && <Badge tone="danger">{c.late_cancels} late cancel{c.late_cancels > 1 ? "s" : ""}</Badge>}
+                       </span>
+                     </span>
+diff --git a/src/app/api/uploads/[id]/route.ts b/src/app/api/uploads/[id]/route.ts
+new file mode 100644
+index 0000000..4b30e08
+--- /dev/null
++++ b/src/app/api/uploads/[id]/route.ts
+@@ -0,0 +1,14 @@
++import { NextResponse } from "next/server";
++import { getSession } from "@/lib/auth";
++import { downloadUrl } from "@/lib/services/uploads";
++
++/** Redirects staff (or the uploader) to a short-lived download link from storage. */
++export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
++  const user = await getSession();
++  if (!user) return NextResponse.json({ error: "Sign in first" }, { status: 401 });
++  const { id } = await params;
++  if (!/^[0-9a-f-]{36}$/.test(id)) return NextResponse.json({ error: "Not found" }, { status: 404 });
++  const url = await downloadUrl(user, id);
++  if (!url) return NextResponse.json({ error: "This file isn't available for download (demo storage or no access)." }, { status: 404 });
++  return NextResponse.redirect(url, 302);
++}
+diff --git a/src/app/team/handbook/icons.ts b/src/app/team/handbook/icons.ts
+index 3c5808b..63d0e4d 100644
+--- a/src/app/team/handbook/icons.ts
++++ b/src/app/team/handbook/icons.ts
+@@ -1,2 +1,2 @@
+-import { Rocket, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen, type LucideIcon } from "lucide-react";
+-export const HB_ICONS: Record<string, LucideIcon> = { Rocket, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen };
++import { Rocket, ShieldCheck, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen, type LucideIcon } from "lucide-react";
++export const HB_ICONS: Record<string, LucideIcon> = { Rocket, ShieldCheck, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen };
+diff --git a/src/app/team/layout.tsx b/src/app/team/layout.tsx
+index 52a3b3a..520276e 100644
+--- a/src/app/team/layout.tsx
++++ b/src/app/team/layout.tsx
+@@ -1,6 +1,7 @@
+ import { redirect } from "next/navigation";
+ import { requireUser } from "@/lib/auth";
+ import { getMember, opportunities, licenses, REQUIRED_DOCS } from "@/lib/services/team";
++import { standardsAcceptance } from "@/lib/services/standards";
+ import { listNotifications, unreadCounts } from "@/lib/services/notifications";
+ import { AppShell, type NavGroup } from "@/components/shell/app-shell";
+ 
+@@ -9,7 +10,8 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+   const member = await getMember(user.id);
+   if (!member) redirect("/login");
+   const active = member.status === "active";
+-  const [counts, notes, opps, lic] = await Promise.all([unreadCounts(user.id), listNotifications(user.id, "all", 8), active ? opportunities(member) : Promise.resolve([]), licenses(member.id)]);
++  const [counts, notes, opps, lic, standards] = await Promise.all([unreadCounts(user.id), listNotifications(user.id, "all", 8), active ? opportunities(member) : Promise.resolve([]), licenses(member.id), standardsAcceptance(member.id)]);
++  const standardsBadge = standards ? 0 : 1;
+   const openCount = opps.filter((o) => (o.view_status === "available" && o.eligible) || o.view_status === "offered").length;
+   const licIssues = REQUIRED_DOCS.filter((d) => d.required).filter((d) => {
+     const docs = lic.filter((l) => l.doc_type === d.type);
+@@ -20,6 +22,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+   const nav: NavGroup[] = !active ? [
+     { items: [{ href: "/team", label: "Application", icon: "ClipboardList" }] },
+     { title: "Get ready", items: [
++      { href: "/team/standards", label: "Team Standards", icon: "ShieldCheck", badge: standardsBadge, badgeTone: "danger" },
+       { href: "/team/licenses", label: "Licenses", icon: "ShieldCheck", badge: licIssues, badgeTone: "danger" },
+       { href: "/team/profile", label: "Profile", icon: "UserRound" },
+       { href: "/team/handbook", label: "Team Handbook", icon: "BookOpen" },
+@@ -38,6 +41,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+     ] },
+     { title: "Resources", items: [
+       { href: "/team/handbook", label: "Team Handbook", icon: "BookOpen" },
++      { href: "/team/standards", label: "Team Standards", icon: "ShieldCheck", badge: standardsBadge, badgeTone: "danger" },
+       { href: "/team/licenses", label: "Licenses", icon: "ShieldCheck", badge: licIssues, badgeTone: "danger" },
+       { href: "/team/profile", label: "Profile", icon: "UserRound" },
+       { href: "/team/settings", label: "Settings", icon: "Settings" },
+diff --git a/src/app/team/open/board.tsx b/src/app/team/open/board.tsx
+index 838eaa5..929be6e 100644
+--- a/src/app/team/open/board.tsx
++++ b/src/app/team/open/board.tsx
+@@ -5,7 +5,7 @@ import Link from "next/link";
+ import { useRouter } from "next/navigation";
+ import {
+   CalendarDays, Clock, MapPin, Camera, Video, Navigation, CircleDollarSign, Users, AlertTriangle, CheckCircle2, Search, SlidersHorizontal,
+-  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route,
++  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert,
+ } from "lucide-react";
+ import { Button, ButtonLink, StatusBadge, Badge, Select, Input, EmptyState, Alert, Field, Textarea } from "@/components/ui";
+ import { Modal, Tabs, useAction, useToast } from "@/components/ui/interactive";
+@@ -19,7 +19,7 @@ import type { Opportunity } from "@/lib/services/team";
+ type Item = Omit<Opportunity, "expires_at"> & { expires_at: string | null };
+ type Tab = "offered" | "available" | "pending" | "accepted" | "closed" | "declined";
+ 
+-export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string }) {
++export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
+   const router = useRouter();
+   const toast = useToast();
+   const { run, pending } = useAction();
+@@ -65,6 +65,12 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+   const activeFilters = [service !== discipline, role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
+   const reset = () => { setService(discipline); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
+ 
++  // The team standards must be accepted before signing for any wedding.
++  const startSign = (i: Item) => {
++    if (standardsAccepted) { setConfirm(i); return; }
++    toast({ tone: "info", title: "Accept the team standards first", body: "It takes a couple of minutes, then you can sign for this wedding." });
++    router.push("/team/standards");
++  };
+   const doDeclineOffer = (i: Item) => run(() => declineOfferAction(i.id, declineNote ? `${declineReason} — ${declineNote}` : declineReason), {
+     onSuccess: () => { setDeclineOffer(null); setDetail(null); setDeclineNote(""); router.refresh(); },
+   });
+@@ -74,6 +80,12 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+ 
+   return (
+     <div>
++      {!standardsAccepted && (
++        <Alert tone="danger" icon={ShieldAlert} className="mb-4" title="Accept the team standards to take weddings"
++          action={<ButtonLink href="/team/standards" size="sm">Review &amp; accept</ButtonLink>}>
++          Our shooting standard, footage tagging, backup rules, insurance and liability terms are now required for every wedding.
++        </Alert>
++      )}
+       <Alert tone="blush" icon={Info} className="mb-6">
+         To accept a wedding you&apos;ll sign our contractor agreement for that date, then a coordinator reviews and confirms you — it stays under <b>Pending</b> until then. Make sure the date is <Link href="/team/availability" className="font-semibold underline">marked available</Link> first. Distances are straight-line from {homeLabel}.
+       </Alert>
+@@ -123,7 +135,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+       ) : (
+         <div className="grid gap-5 md:grid-cols-2 2xl:grid-cols-3">
+           {filtered.map((i) => (
+-            <OpportunityCard key={i.id} item={i} onView={() => setDetail(i)} onAccept={() => setConfirm(i)} onDecline={() => i.view_status === "offered" ? setDeclineOffer(i) : setDecline(i)}
++            <OpportunityCard key={i.id} item={i} onView={() => setDetail(i)} onAccept={() => startSign(i)} onDecline={() => i.view_status === "offered" ? setDeclineOffer(i) : setDecline(i)}
+               onUndo={() => run(() => undoDeclineAction(i.id), { onSuccess: () => router.refresh() })}
+               onWithdraw={() => run(() => withdrawRequestAction(i.id), { onSuccess: () => router.refresh() })} pending={pending} />
+           ))}
+@@ -136,7 +148,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+         footer={detail && (detail.view_status === "available" || detail.view_status === "offered") ? (
+           <>
+             <Button variant="outline" icon={XCircle} onClick={() => detail.view_status === "offered" ? setDeclineOffer(detail) : setDecline(detail)}>{detail.view_status === "offered" ? "Decline offer" : "Decline"}</Button>
+-            <Button icon={FileSignature} onClick={() => setConfirm(detail)} disabled={!detail.eligible || detail.conflict || (!!detail.calendar && detail.calendar !== "available")}>Review &amp; sign</Button>
++            <Button icon={FileSignature} onClick={() => startSign(detail)} disabled={!detail.eligible || detail.conflict || (!!detail.calendar && detail.calendar !== "available")}>Review &amp; sign</Button>
+           </>
+         ) : <Button variant="outline" onClick={() => setDetail(null)}>Close</Button>}>
+         {detail && <DetailBody item={detail} homeLabel={homeLabel} />}
+@@ -146,7 +158,11 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+       <SignContractModal assignmentId={confirm?.id ?? null} open={!!confirm} onClose={() => setConfirm(null)} memberName={memberName}
+         title={confirm?.view_status === "offered" ? "Sign to confirm this wedding" : "Sign to request this wedding"}
+         signLabel={confirm?.view_status === "offered" ? "Sign & confirm" : "Sign & send request"}
+-        sign={(sig) => acceptOpportunityAction(confirm!.id, sig)}
++        sign={async (sig) => {
++          const r = await acceptOpportunityAction(confirm!.id, sig);
++          if (!r.ok && r.data?.needsStandards) { setConfirm(null); router.push("/team/standards"); }
++          return r;
++        }}
+         onSigned={(d) => { const i = confirm!; setConfirm(null); setDetail(null); if (d) setSuccess({ item: i, status: d.status, weddingId: d.weddingId }); router.refresh(); }}
+         summary={confirm && (
+           <div className="rounded-2xl bg-canvas p-4 text-sm">
+diff --git a/src/app/team/open/page.tsx b/src/app/team/open/page.tsx
+index 8cfd561..8969bb3 100644
+--- a/src/app/team/open/page.tsx
++++ b/src/app/team/open/page.tsx
+@@ -2,6 +2,7 @@ import { after } from "next/server";
+ import { requireActiveMember } from "@/lib/services/me";
+ import { backfillWeddingCoords } from "@/lib/services/geo";
+ import { opportunities } from "@/lib/services/team";
++import { standardsAcceptance } from "@/lib/services/standards";
+ import { OpenWeddingsBoard } from "./board";
+ 
+ export const metadata = { title: "Open Weddings" };
+@@ -9,7 +10,7 @@ export const metadata = { title: "Open Weddings" };
+ export default async function OpenWeddingsPage({ searchParams }: { searchParams: Promise<{ id?: string }> }) {
+   const { member } = await requireActiveMember();
+   const sp = await searchParams;
+-  const opps = await opportunities(member);
++  const [opps, standards] = await Promise.all([opportunities(member), standardsAcceptance(member.id)]);
+   // Geocode older venues in the background so the next visit shows exact distances
+   after(() => backfillWeddingCoords().catch(() => {}));
+   return (
+@@ -19,6 +20,7 @@ export default async function OpenWeddingsPage({ searchParams }: { searchParams:
+       homeCity={member.city ?? ""}
+       homeLabel={member.lat != null ? "your home base" : member.city ? `${member.city} (add your home address in Profile for exact distances)` : "your home market"}
+       memberName={member.full_name}
++      standardsAccepted={!!standards}
+       items={opps.map((o) => ({ ...o, expires_at: o.expires_at ? String(new Date(o.expires_at).toISOString()) : null, accepted_at: null, prep_confirmed_at: null }))}
+     />
+   );
+diff --git a/src/app/team/standards/page.tsx b/src/app/team/standards/page.tsx
+new file mode 100644
+index 0000000..e73e492
+--- /dev/null
++++ b/src/app/team/standards/page.tsx
+@@ -0,0 +1,13 @@
++import { currentMember } from "@/lib/services/me";
++import { standardsAcceptance } from "@/lib/services/standards";
++import { STANDARDS, STANDARDS_VERSION } from "@/content/standards";
++import { StandardsView } from "./view";
++
++export const metadata = { title: "Team Standards" };
++
++export default async function StandardsPage() {
++  const { member } = await currentMember();
++  const accepted = await standardsAcceptance(member.id);
++  return <StandardsView sections={STANDARDS} version={STANDARDS_VERSION} memberName={member.full_name}
++    accepted={accepted ? { name: accepted.signerName, at: new Date(accepted.signedAt).toISOString() } : null} />;
++}
+diff --git a/src/app/team/standards/view.tsx b/src/app/team/standards/view.tsx
+new file mode 100644
+index 0000000..7b03539
+--- /dev/null
++++ b/src/app/team/standards/view.tsx
+@@ -0,0 +1,72 @@
++"use client";
++import * as React from "react";
++import Link from "next/link";
++import { useRouter } from "next/navigation";
++import { ShieldCheck, CheckCircle2, ArrowRight, BookOpen } from "lucide-react";
++import { PageHeader, Card, Button, Input, Field, Checkbox, Alert, Badge } from "@/components/ui";
++import { useToast } from "@/components/ui/interactive";
++import { acceptStandardsAction } from "@/lib/actions/team";
++import { fmtDate } from "@/lib/utils";
++
++export function StandardsView({ sections, version, memberName, accepted }: {
++  sections: { title: string; href: string; points: string[] }[]; version: number; memberName: string; accepted: { name: string; at: string } | null;
++}) {
++  const router = useRouter();
++  const toast = useToast();
++  const [name, setName] = React.useState("");
++  const [agree, setAgree] = React.useState(false);
++  const [error, setError] = React.useState<string | null>(null);
++  const [busy, setBusy] = React.useState(false);
++
++  const submit = async () => {
++    if (!agree) { setError("Tick the box to confirm you'll follow the standards."); return; }
++    if (!name.trim()) { setError("Type your full name to accept."); return; }
++    setBusy(true); setError(null);
++    const r = await acceptStandardsAction({ name, agree });
++    setBusy(false);
++    if (!r.ok) { setError(r.message ?? "Couldn't save."); return; }
++    toast({ tone: "success", title: r.message ?? "Accepted" });
++    router.refresh();
++  };
++
++  return (
++    <div className="mx-auto max-w-3xl space-y-6">
++      <PageHeader eyebrow="Required" title="Team standards"
++        description="How every Visual Weddings shooter records, tags, backs up and protects a wedding — and what you're responsible for. Read each section, then accept below. You need to accept before you can take weddings." />
++      {accepted && (
++        <Alert tone="success" icon={CheckCircle2} title="You've accepted these standards">
++          Accepted by {accepted.name} on {fmtDate(accepted.at, "MMMM d, yyyy")} (version {version}). Your contractor agreement for each wedding includes the same terms.
++        </Alert>
++      )}
++      <div className="grid gap-4 sm:grid-cols-2">
++        {sections.map((s, i) => (
++          <Card key={s.href} className="flex flex-col p-5">
++            <div className="flex items-center gap-2">
++              <span className="grid size-7 place-items-center rounded-full bg-midnight-900 text-[12px] font-semibold text-white">{i + 1}</span>
++              <h2 className="font-semibold text-ink">{s.title}</h2>
++            </div>
++            <ul className="mt-3 flex-1 list-disc space-y-1.5 pl-5 text-[13px] text-midnight-700">
++              {s.points.map((p) => <li key={p}>{p}</li>)}
++            </ul>
++            <Link href={s.href} className="mt-4 inline-flex items-center gap-1.5 text-[13px] font-medium text-blush-700 hover:underline"><BookOpen className="size-4" />Read the full page<ArrowRight className="size-3.5" /></Link>
++          </Card>
++        ))}
++      </div>
++      {!accepted && (
++        <Card className="p-5 sm:p-6">
++          <div className="flex items-center gap-2"><ShieldCheck className="size-5 text-blush-600" /><h2 className="font-semibold text-ink">Accept the standards</h2><Badge>Version {version}</Badge></div>
++          <div className="mt-4 space-y-4">
++            <Checkbox checked={agree} onChange={(e) => setAgree(e.target.checked)} className="items-start [&>input]:mt-0.5"
++              label={<span>I&apos;ve read the shooting standard, tagging, backup and liability pages. I&apos;ll follow them on every Visual Weddings assignment, I&apos;ll keep the required insurance, and I understand I&apos;m responsible for my own equipment and for damage I cause.</span>} />
++            <Field label="Type your full name" htmlFor="std-name" hint={`As it appears on your profile: ${memberName}`}>
++              <Input id="std-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder={memberName} className="font-serif text-lg"
++                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } }} />
++            </Field>
++            {error && <Alert tone="danger">{error}</Alert>}
++            <Button icon={ShieldCheck} loading={busy} onClick={submit}>Accept standards</Button>
++          </div>
++        </Card>
++      )}
++    </div>
++  );
++}
+diff --git a/src/components/uploads/markers-modal.tsx b/src/components/uploads/markers-modal.tsx
+new file mode 100644
+index 0000000..50122d0
+--- /dev/null
++++ b/src/components/uploads/markers-modal.tsx
+@@ -0,0 +1,92 @@
++"use client";
++import * as React from "react";
++import { useRouter } from "next/navigation";
++import { Bookmark, Plus, Trash2 } from "lucide-react";
++import { Button, Input, Select, Field, Alert } from "@/components/ui";
++import { Modal, useToast } from "@/components/ui/interactive";
++import { addMarkerAction, deleteMarkerAction } from "@/lib/actions/footage";
++import { MARKER_BEATS, MOMENTS, BEAT_LABEL, formatTimecode } from "@/content/footage";
++import { duration } from "@/lib/utils";
++
++export type Marker = { id: string; at: number; beat: string; note: string | null };
++
++/** Lists and edits the timecode markers inside one clip (vows at 12:31, toast starts at 3:05…). */
++export function MarkersModal({ open, onClose, upload, readOnly }: {
++  open: boolean; onClose: () => void; readOnly?: boolean;
++  upload: { id: string; filename: string; duration_seconds: number | null; markers: Marker[]; camera_markers?: boolean } | null;
++}) {
++  const router = useRouter();
++  const toast = useToast();
++  const [markers, setMarkers] = React.useState<Marker[]>([]);
++  const [time, setTime] = React.useState("");
++  const [beat, setBeat] = React.useState<string>(MARKER_BEATS[0].value);
++  const [note, setNote] = React.useState("");
++  const [error, setError] = React.useState<string | null>(null);
++  const [busy, setBusy] = React.useState(false);
++  const changed = React.useRef(false);
++
++  React.useEffect(() => {
++    if (open && upload) { setMarkers(upload.markers); setTime(""); setNote(""); setError(null); changed.current = false; }
++  }, [open, upload]);
++
++  const close = () => { onClose(); if (changed.current) router.refresh(); };
++  const add = async () => {
++    if (!upload) return;
++    setBusy(true); setError(null);
++    const r = await addMarkerAction(upload.id, { time, beat, note });
++    setBusy(false);
++    if (!r.ok || !r.data) { setError(r.message ?? "Couldn't add the marker."); return; }
++    const added = { id: r.data.id, at: r.data.at, beat, note: note.trim() || null };
++    setMarkers((m) => [...m, added].sort((a, b) => a.at - b.at));
++    setTime(""); setNote(""); changed.current = true;
++  };
++  const remove = async (id: string) => {
++    const r = await deleteMarkerAction(id);
++    if (!r.ok) { toast({ tone: "error", title: r.message ?? "Couldn't remove the marker" }); return; }
++    setMarkers((m) => m.filter((x) => x.id !== id)); changed.current = true;
++  };
++
++  return (
++    <Modal open={open} onClose={close} size="md" title="Markers" description={upload ? `${upload.filename}${upload.duration_seconds ? ` · ${duration(upload.duration_seconds)}` : ""}` : undefined}
++      icon={<span className="grid size-11 place-items-center rounded-full bg-blush-50 text-blush-600"><Bookmark className="size-5" /></span>}
++      footer={<Button variant="outline" onClick={close}>Done</Button>}>
++      <div className="space-y-4">
++        {upload?.camera_markers && <Alert tone="info">In-camera markers were recorded on this clip — the editor reads those from the file.</Alert>}
++        {markers.length === 0 ? (
++          <p className="rounded-2xl bg-canvas px-4 py-6 text-center text-sm text-muted">No markers yet. Mark key beats so the editor can jump straight to them.</p>
++        ) : (
++          <ul className="divide-y divide-line rounded-2xl border border-line">
++            {markers.map((m) => (
++              <li key={m.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
++                <span className="w-16 shrink-0 font-mono text-[13px] text-midnight-700">{formatTimecode(m.at)}</span>
++                <span className="min-w-0 flex-1"><span className="font-medium text-ink">{BEAT_LABEL[m.beat] ?? m.beat}</span>{m.note && <span className="block truncate text-[12px] text-muted">{m.note}</span>}</span>
++                {!readOnly && <button onClick={() => remove(m.id)} className="-m-2 grid size-9 place-items-center rounded-lg text-midnight-300 hover:bg-danger-50 hover:text-danger-500" aria-label={`Remove marker at ${formatTimecode(m.at)}`}><Trash2 className="size-4" /></button>}
++              </li>
++            ))}
++          </ul>
++        )}
++        {!readOnly && (
++          <div className="rounded-2xl border border-line p-4">
++            <div className="grid gap-3 sm:grid-cols-[110px_1fr]">
++              <Field label="Time in clip" htmlFor="mk-time">
++                <Input id="mk-time" value={time} onChange={(e) => setTime(e.target.value)} placeholder="12:31" inputMode="numeric" className="font-mono"
++                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
++              </Field>
++              <Field label="What happens" htmlFor="mk-beat">
++                <Select id="mk-beat" value={beat} onChange={(e) => setBeat(e.target.value)}>
++                  <optgroup label="Beats">{MARKER_BEATS.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
++                  <optgroup label="Moments">{MOMENTS.map((b) => <option key={b.value} value={b.value}>{b.label}</option>)}</optgroup>
++                </Select>
++              </Field>
++            </div>
++            <Field label="Note (optional)" htmlFor="mk-note" className="mt-3">
++              <Input id="mk-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="e.g. Best man's speech — mic pops at the start" />
++            </Field>
++            {error && <Alert tone="danger" className="mt-3">{error}</Alert>}
++            <Button className="mt-3" size="sm" icon={Plus} loading={busy} onClick={add} disabled={!time.trim()}>Add marker</Button>
++          </div>
++        )}
++      </div>
++    </Modal>
++  );
++}
+diff --git a/src/components/uploads/upload-center.tsx b/src/components/uploads/upload-center.tsx
+index 3a336be..bb0e346 100644
+--- a/src/components/uploads/upload-center.tsx
++++ b/src/components/uploads/upload-center.tsx
+@@ -4,36 +4,49 @@ import * as React from "react";
+ import Link from "next/link";
+ import { useRouter, usePathname } from "next/navigation";
+ import {
+-  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause,
++  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause, Tag, Bookmark, Mic,
+ } from "lucide-react";
+-import { Button, Card, CardHeader, CardBody, StatusBadge, EmptyState, Progress, Alert, Badge } from "@/components/ui";
++import { Button, Card, CardHeader, CardBody, StatusBadge, EmptyState, Progress, Alert, Badge, Select, Field, Checkbox } from "@/components/ui";
+ import { Tabs, useToast, useAction } from "@/components/ui/interactive";
+ import { uploadFile, type UploadHandle } from "@/lib/client-upload";
+ import { uploadBatchDoneAction, deleteUploadAction } from "@/lib/actions/team";
++import { retagUploadAction } from "@/lib/actions/footage";
++import { MOMENTS, MIXED, SOURCES, SOURCE_LABEL, momentLabel, isAudioSource } from "@/content/footage";
++import { MarkersModal, type Marker } from "./markers-modal";
+ import { cn, bytes, duration, fmtDate, ago } from "@/lib/utils";
+ import { ROLE_LABEL } from "@/lib/pricing";
+ 
+-type Wedding = { id: string; couple: string; date: string; assignmentId: string; role: string; city: string; done: number; failed: number; bytes: number };
+-type FileRow = { id: string; wedding_id: string | null; category: string; filename: string; size_bytes: number; status: string; error: string | null; duration_seconds: number | null; created_at: string; couple: string | null };
+-type QueueItem = { key: string; file: File; pct: number; status: "queued" | "uploading" | "done" | "failed"; error?: string; id?: string; category: string; weddingId: string; retryOf?: string };
++type Wedding = { id: string; couple: string; date: string; assignmentId: string; role: string; city: string; done: number; failed: number; untagged: number; bytes: number };
++type FileRow = {
++  id: string; wedding_id: string | null; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string; size_bytes: number;
++  status: string; error: string | null; duration_seconds: number | null; created_at: string; couple: string | null; markers: Marker[];
++};
++type Tags = { moment: string; source: string; cameraMarkers: boolean };
++type QueueItem = { key: string; file: File; pct: number; status: "queued" | "uploading" | "done" | "failed"; error?: string; id?: string; category: string; weddingId: string; retryOf?: string } & Tags;
+ 
+-const CATS = {
+-  photo: [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }],
+-  video: [{ value: "footage", label: "Footage" }, { value: "ceremony", label: "Ceremony" }, { value: "reception", label: "Reception" }],
+-} as const;
++/** Photos keep RAW / Edited / Highlights folders; video files are filed by moment and camera instead. */
++const PHOTO_CATS = [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }] as const;
++const LEGACY_VIDEO_CATS: Record<string, string> = { footage: "Footage", audio: "Audio", ceremony: "Ceremony", reception: "Reception" };
+ const ACCEPT = {
+   photo: ".cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2,.jpg,.jpeg,.png,.tif,.tiff,.heic,.zip",
+   video: "video/*,.mp4,.mov,.mxf,.braw,.r3d,.wav,.mp3,.zip",
+ };
+ const CONCURRENCY = 3;
+ 
+-export function UploadCenter({ kind, weddings, files, selected, provider }: { kind: "photo" | "video"; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string }) {
++export function UploadCenter({ kind, weddings, files, selected, provider, providerLabel }: { kind: "photo" | "video"; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string; providerLabel: string }) {
+   const router = useRouter();
+   const pathname = usePathname();
+   const toast = useToast();
+   const { run } = useAction();
+   const wedding = weddings.find((w) => w.id === selected) ?? null;
+-  const [cat, setCat] = React.useState<string>(CATS[kind][0].value);
++  const [cat, setCat] = React.useState<string>(kind === "photo" ? "raw" : "footage");
++  // Video must say which part of the day it covers; photographers often dump a whole card, so "whole day" is allowed.
++  const [moment, setMoment] = React.useState<string>(kind === "photo" ? MIXED.value : "");
++  const [source, setSource] = React.useState<string>(SOURCES[kind][0].value);
++  const [cameraMarkers, setCameraMarkers] = React.useState(false);
++  const [markersFor, setMarkersFor] = React.useState<FileRow | null>(null);
++  const [retagging, setRetagging] = React.useState<string | null>(null);
++  const needsMoment = kind === "video" && !moment;
+   const [queue, setQueue] = React.useState<QueueItem[]>([]);
+   const [drag, setDrag] = React.useState(false);
+   const handles = React.useRef(new Map<string, UploadHandle>());
+@@ -66,7 +79,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+     }
+     const w = weddings.find((x) => x.id === next.weddingId);
+     setQueue((q) => q.map((x) => (x.key === next.key ? { ...x, status: "uploading" } : x)));
+-    const h = uploadFile(next.file, { weddingId: next.weddingId, assignmentId: w?.assignmentId ?? null, kind, category: next.category, retryOf: next.retryOf ?? null },
++    const h = uploadFile(next.file, { weddingId: next.weddingId, assignmentId: w?.assignmentId ?? null, kind, category: next.category, retryOf: next.retryOf ?? null, moment: next.moment || null, source: next.source || null, cameraMarkers: next.cameraMarkers },
+       (pct) => setQueue((q) => q.map((x) => (x.key === next.key ? { ...x, pct } : x))),
+       (id) => setQueue((q) => q.map((x) => (x.key === next.key ? { ...x, id } : x))));
+     handles.current.set(next.key, h);
+@@ -79,12 +92,13 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+ 
+   const add = (list: FileList | File[] | null) => {
+     if (!list || !wedding) return;
++    if (needsMoment) { toast({ tone: "error", title: "Choose the moment first", body: "Pick which part of the day these clips cover, then add the files." }); return; }
+     const arr = Array.from(list).filter((f) => f.size > 0);
+     if (!arr.length) return;
+     const tooBig = arr.filter((f) => (kind === "photo" ? f.size > 200 * 1024 ** 2 : f.size > 100 * 1024 ** 3));
+     if (tooBig.length) toast({ tone: "error", title: `${tooBig.length} file${tooBig.length > 1 ? "s are" : " is"} too large`, body: kind === "photo" ? "Photo files are limited to 200 MB each." : "Video files are limited to 100 GB each." });
+     const ok = arr.filter((f) => !tooBig.includes(f));
+-    setQueue((q) => [...q, ...ok.map((file) => ({ key: `${file.name}-${file.size}-${Math.random()}`, file, pct: 0, status: "queued" as const, category: cat, weddingId: wedding.id }))]);
++    setQueue((q) => [...q, ...ok.map((file) => ({ key: `${file.name}-${file.size}-${Math.random()}`, file, pct: 0, status: "queued" as const, category: cat, weddingId: wedding.id, moment, source, cameraMarkers }))]);
+   };
+   const retry = (item: QueueItem) => setQueue((q) => q.map((x) => (x.key === item.key ? { ...x, status: "queued", pct: 0, error: undefined, retryOf: x.id } : x)));
+   const cancel = (item: QueueItem) => { handles.current.get(item.key)?.cancel(); setQueue((q) => q.map((x) => (x.key === item.key && x.status === "queued" ? { ...x, status: "failed", error: "Cancelled" } : x))); };
+@@ -94,6 +108,13 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+   const failedSaved = visibleFiles.filter((f) => f.status === "failed");
+   const totalPct = queue.length ? queue.reduce((s, q) => s + (q.status === "done" ? 100 : q.pct), 0) / queue.length : 0;
+   const Icon = kind === "photo" ? ImageIcon : Film;
++  const retag = async (f: FileRow, patch: { moment?: string; source?: string }) => {
++    setRetagging(f.id);
++    run(() => retagUploadAction(f.id, patch), { onSuccess: () => router.refresh() });
++    setRetagging(null);
++  };
++  const folderLabel = kind === "photo" ? PHOTO_CATS.find((c) => c.value === cat)?.label : momentLabel(moment || null);
++  const untaggedHere = kind === "video" ? visibleFiles.filter((f) => f.status !== "failed" && !f.moment).length : 0;
+ 
+   return (
+     <div className="grid gap-6 xl:grid-cols-[300px_1fr]">
+@@ -109,7 +130,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+                 <p className="truncate font-medium text-ink">{w.couple}</p>
+                 <p className="text-[12px] text-muted">{fmtDate(w.date, "MMM d, yyyy")} · {w.city}</p>
+               </div>
+-              {w.failed > 0 ? <Badge tone="danger">{w.failed} failed</Badge> : w.done > 0 ? <Badge tone="success">{w.done} files</Badge> : new Date(w.date) <= new Date() ? <Badge tone="warning">Due</Badge> : <Badge>Upcoming</Badge>}
++              {w.failed > 0 ? <Badge tone="danger">{w.failed} failed</Badge> : w.untagged > 0 ? <Badge tone="warning">{w.untagged} untagged</Badge> : w.done > 0 ? <Badge tone="success">{w.done} files</Badge> : new Date(w.date) <= new Date() ? <Badge tone="warning">Due</Badge> : <Badge>Upcoming</Badge>}
+             </div>
+             <p className="mt-2 text-[12px] text-muted">{ROLE_LABEL[w.role]} · {bytes(Number(w.bytes))}</p>
+           </Link>
+@@ -127,22 +148,44 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+                   <Folder className="mr-1 size-4" />Weddings<ChevronRight className="size-3.5" />
+                   <span className="text-midnight-700">{wedding.couple}</span><ChevronRight className="size-3.5" />
+                   <span>{wedding.date}</span><ChevronRight className="size-3.5" />
+-                  <span>{kind === "photo" ? "Photography" : "Videography"}</span><ChevronRight className="size-3.5" />
+-                  <span className="font-semibold text-ink">{CATS[kind].find((c) => c.value === cat)?.label}</span>
++                  <span>{kind === "photo" ? "Photo" : "Video"}</span><ChevronRight className="size-3.5" />
++                  {kind === "photo" && <><span>{folderLabel}</span><ChevronRight className="size-3.5" /></>}
++                  <span className="font-semibold text-ink">{kind === "photo" ? momentLabel(moment) : folderLabel}</span>
+                 </nav>
+-                <Tabs value={cat} onChange={setCat} items={CATS[kind].map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />
++                {kind === "photo" && <Tabs value={cat} onChange={setCat} items={PHOTO_CATS.map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />}
++              </div>
++              <div className="mx-5 mb-4 rounded-2xl bg-canvas/70 p-4 ring-1 ring-line sm:mx-6">
++                <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ink"><Tag className="size-4 text-blush-500" />Tag this batch</p>
++                <p className="mt-0.5 text-[12px] text-muted">Every file you add next gets these tags. Upload one moment and one {kind === "photo" ? "camera body" : "camera or recorder"} at a time — you can change a file&apos;s tag later.</p>
++                <div className="mt-3 grid gap-3 sm:grid-cols-2">
++                  <Field label="Moment" htmlFor="tag-moment" required={kind === "video"}>
++                    <Select id="tag-moment" value={moment} onChange={(e) => setMoment(e.target.value)} aria-invalid={needsMoment || undefined}>
++                      {kind === "video" ? <option value="" disabled>Choose the part of the day…</option> : <option value={MIXED.value}>{MIXED.label}</option>}
++                      {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
++                    </Select>
++                  </Field>
++                  <Field label={kind === "photo" ? "Camera body" : "Camera / recorder"} htmlFor="tag-source">
++                    <Select id="tag-source" value={source} onChange={(e) => setSource(e.target.value)}>
++                      {SOURCES[kind].map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
++                    </Select>
++                  </Field>
++                </div>
++                {kind === "video" && (
++                  <Checkbox className="mt-3 items-start [&>input]:mt-0.5" checked={cameraMarkers} onChange={(e) => setCameraMarkers(e.target.checked)}
++                    label={<span className="text-[13px]">I dropped <b>in-camera markers</b> (shot marks / flags) on these clips{isAudioSource(source) ? " or slate claps on this recording" : ""}</span>} />
++                )}
+               </div>
+               <div className="px-5 pb-5 sm:px-6 sm:pb-6">
+                 <div
+                   onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
+                   onDrop={(e) => { e.preventDefault(); setDrag(false); add(e.dataTransfer.files); }}
+                   className={cn("flex flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-10 text-center transition",
+-                    drag ? "border-blush-400 bg-blush-50" : "border-midnight-100 bg-canvas/60 hover:border-midnight-200")}>
++                    needsMoment ? "border-midnight-100 bg-canvas/40 opacity-70" : drag ? "border-blush-400 bg-blush-50" : "border-midnight-100 bg-canvas/60 hover:border-midnight-200")}>
+                   <div className="grid size-14 place-items-center rounded-2xl bg-white text-midnight-700 shadow-sm"><UploadCloud className="size-6" /></div>
+                   <p className="mt-4 font-semibold text-ink">Drag & drop {kind === "photo" ? "photos" : "video files"} here</p>
+-                  <p className="mt-1 text-sm text-muted">{kind === "photo" ? "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each" : "MP4, MOV, MXF, BRAW, audio · up to 100 GB each"}</p>
++                  <p className="mt-1 text-sm text-muted">{needsMoment ? "Choose the moment above first" : kind === "photo" ? "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each" : "MP4, MOV, MXF, BRAW, WAV/MP3 audio · up to 100 GB each"}</p>
+                   <input ref={inputRef} type="file" multiple accept={ACCEPT[kind]} className="hidden" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+-                  <Button className="mt-5" icon={UploadCloud} onClick={() => inputRef.current?.click()}>Select files</Button>
++                  <Button className="mt-5" icon={UploadCloud} disabled={needsMoment} onClick={() => inputRef.current?.click()}>Select files</Button>
+                 </div>
+                 {kind === "video" && <Alert tone="info" icon={Info} className="mt-4">Large video files can take a while. Keep this tab open until each file shows <b>Uploaded</b>; we then process previews in the background — you can safely leave once processing starts.</Alert>}
+               </div>
+@@ -167,7 +210,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+                             <span className="shrink-0 text-muted">{q.status === "uploading" ? `${Math.round(q.pct)}%` : q.status === "queued" ? "Waiting" : q.status === "done" ? (kind === "video" ? "Processing" : "Uploaded") : "Failed"}</span>
+                           </div>
+                           {q.status === "failed" ? <p className="text-[12px] text-danger-500">{q.error}</p> : <Progress value={q.pct} className="mt-1.5 h-1.5" tone={q.status === "done" ? "success" : "midnight"} />}
+-                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {q.category}</p>
++                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === q.category)?.label ?? q.category} · ` : ""}{momentLabel(q.moment || null)} · {SOURCE_LABEL[q.source] ?? q.source}</p>
+                         </div>
+                         {q.status === "failed" && <Button size="sm" variant="outline" icon={RotateCcw} onClick={() => retry(q)}>Retry</Button>}
+                         {(q.status === "uploading" || q.status === "queued") && <button onClick={() => cancel(q)} className="text-midnight-300 hover:text-danger-500" aria-label={`Cancel ${q.file.name}`}><X className="size-4" /></button>}
+@@ -181,6 +224,11 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+             <Card className="overflow-hidden">
+               <CardHeader title="Uploaded files" subtitle={`${visibleFiles.filter((f) => f.status !== "failed").length} files · ${bytes(visibleFiles.filter((f) => f.status !== "failed").reduce((s, f) => s + Number(f.size_bytes), 0))}`}
+                 action={failedSaved.length > 0 ? <Badge tone="danger">{failedSaved.length} failed</Badge> : undefined} />
++              {untaggedHere > 0 && (
++                <div className="mx-5 mt-4 sm:mx-6">
++                  <Alert tone="warning" icon={Tag} title={`${untaggedHere} file${untaggedHere > 1 ? "s need" : " needs"} a moment tag`}>Use the Moment column below so the editor knows where each clip belongs.</Alert>
++                </div>
++              )}
+               {failedSaved.length > 0 && (
+                 <div className="mx-5 mt-4 sm:mx-6">
+                   <Alert tone="danger" icon={AlertCircle} title={`${failedSaved.length} file${failedSaved.length > 1 ? "s" : ""} failed in an earlier session`}>
+@@ -191,7 +239,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+                           <RotateCcw className="size-3" />Retry {f.filename}
+                           <input type="file" className="hidden" accept={ACCEPT[kind]} onChange={(e) => {
+                             const file = e.target.files?.[0];
+-                            if (file) setQueue((q) => [...q, { key: `${file.name}-${Math.random()}`, file, pct: 0, status: "queued", category: f.category, weddingId: wedding.id, retryOf: f.id, id: f.id }]);
++                            if (file) setQueue((q) => [...q, { key: `${file.name}-${Math.random()}`, file, pct: 0, status: "queued", category: f.category, weddingId: wedding.id, retryOf: f.id, id: f.id, moment: f.moment ?? moment, source: f.source ?? source, cameraMarkers: f.camera_markers }]);
+                             e.target.value = "";
+                           }} />
+                         </label>
+@@ -202,19 +250,43 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+               )}
+               <div className="mt-4 overflow-x-auto">
+                 {visibleFiles.length === 0 ? <EmptyState icon={Icon} title="No files yet" description="Files you upload for this wedding will appear here." /> : (
+-                  <table className="w-full min-w-[640px] text-sm">
++                  <table className="w-full min-w-[860px] text-sm">
+                     <thead><tr className="border-y border-line bg-canvas/60 text-left text-[12px] uppercase tracking-wide text-muted">
+-                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Folder</th><th className="px-4 py-3 font-medium">Size</th>
++                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Moment</th><th className="px-4 py-3 font-medium">{kind === "photo" ? "Folder · body" : "Camera"}</th><th className="px-4 py-3 font-medium">Size</th>
+                       {kind === "video" && <th className="px-4 py-3 font-medium">Duration</th>}
++                      {kind === "video" && <th className="px-4 py-3 font-medium">Markers</th>}
+                       <th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Uploaded</th><th className="px-4 py-3" />
+                     </tr></thead>
+                     <tbody>
+                       {visibleFiles.map((f) => (
+                         <tr key={f.id} className="border-b border-line/70 last:border-0">
+                           <td className="max-w-[260px] px-6 py-3"><span className="flex items-center gap-2 truncate font-medium text-ink"><Icon className="size-4 shrink-0 text-midnight-300" />{f.filename}</span>{f.error && <span className="block text-[12px] text-danger-500">{f.error}</span>}</td>
+-                          <td className="px-4 py-3 capitalize text-midnight-600">{f.category}</td>
++                          <td className="px-4 py-2">
++                            {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
++                              <Select aria-label={`Moment for ${f.filename}`} value={f.moment ?? ""} disabled={retagging === f.id}
++                                onChange={(e) => retag(f, { moment: e.target.value })}
++                                className={cn("h-9 w-[190px] text-[13px]", !f.moment && kind === "video" && "border-warning-500 text-warning-700")}>
++                                {!f.moment && <option value="" disabled>Untagged</option>}
++                                {kind === "photo" && <option value={MIXED.value}>{MIXED.label}</option>}
++                                {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
++                              </Select>
++                            )}
++                          </td>
++                          <td className="whitespace-nowrap px-4 py-3 text-midnight-600">
++                            {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === f.category)?.label ?? f.category}${f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ""}`
++                              : <span className="inline-flex items-center gap-1">{isAudioSource(f.source) && <Mic className="size-3.5 text-midnight-300" />}{f.source ? SOURCE_LABEL[f.source] ?? f.source : LEGACY_VIDEO_CATS[f.category] ?? f.category}</span>}
++                          </td>
+                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{bytes(Number(f.size_bytes))}</td>
+                           {kind === "video" && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
++                          {kind === "video" && (
++                            <td className="px-4 py-3">
++                              {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
++                                <button onClick={() => setMarkersFor(f)} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium text-midnight-700 ring-1 ring-line hover:bg-midnight-50">
++                                  <Bookmark className="size-3.5" />{f.markers.length ? `${f.markers.length} marker${f.markers.length > 1 ? "s" : ""}` : "Add"}{f.camera_markers && <span className="text-blush-600">+ cam</span>}
++                                </button>
++                              )}
++                            </td>
++                          )}
+                           <td className="px-4 py-3"><StatusBadge status={f.status} />{f.status === "processing" && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-muted"><Clock className="size-3" />few min</span>}</td>
+                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{ago(f.created_at)}</td>
+                           <td className="px-4 py-3 text-right">{f.status === "failed" && <button onClick={() => run(() => deleteUploadAction(f.id), { onSuccess: () => router.refresh() })} className="-m-2 inline-grid size-9 place-items-center rounded-lg text-midnight-300 hover:bg-danger-50 hover:text-danger-500" aria-label="Remove failed file"><Trash2 className="size-4" /></button>}</td>
+@@ -228,8 +300,9 @@ export function UploadCenter({ kind, weddings, files, selected, provider }: { ki
+ 
+             <div className="flex items-start gap-3 rounded-2xl bg-white p-4 text-[12px] text-muted ring-1 ring-line">
+               <HardDrive className="mt-0.5 size-4 shrink-0" />
+-              <p>Storage: <b className="text-midnight-700">{provider === "supabase" ? "Supabase Storage (private bucket)" : "Demo storage — transfers are simulated"}</b>. Files go directly from your browser to storage over signed URLs; {CONCURRENCY} files upload in parallel. Due within 48 hours of the wedding.</p>
++              <p>Storage: <b className="text-midnight-700">{providerLabel}</b>. Files go directly from your browser to storage{provider === "dropbox" ? " — large videos in 32 MB pieces that retry on their own if your connection drops" : " over signed URLs"}; {CONCURRENCY} files upload in parallel and each one is checked once it lands. Due within 48 hours of the wedding. Keep your backup copies until your coordinator confirms delivery.</p>
+             </div>
++            <MarkersModal open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
+           </>
+         )}
+       </div>
+diff --git a/src/components/uploads/upload-page.tsx b/src/components/uploads/upload-page.tsx
+index dcb4527..d4de190 100644
+--- a/src/components/uploads/upload-page.tsx
++++ b/src/components/uploads/upload-page.tsx
+@@ -17,10 +17,10 @@ export async function UploadPage({ kind, weddingParam }: { kind: "photo" | "vide
+         { href: "/team/uploads" + (selected ? `?wedding=${selected}` : ""), label: "Photo uploads" },
+         { href: "/team/uploads/video" + (selected ? `?wedding=${selected}` : ""), label: "Video uploads" },
+       ].map((t, i) => ({ ...t, href: i === 0 ? (kind === "photo" ? base : t.href) : kind === "video" ? base : t.href }))} />
+-      <UploadCenter kind={kind} provider={storage().name} selected={selected}
+-        weddings={weddings.map((w) => ({ id: w.id, couple: w.couple, date: w.wedding_date, assignmentId: w.assignment_id, role: w.role, city: w.city, done: w.done, failed: w.failed, bytes: Number(w.bytes) }))}
++      <UploadCenter kind={kind} provider={storage().name} providerLabel={storage().label} selected={selected}
++        weddings={weddings.map((w) => ({ id: w.id, couple: w.couple, date: w.wedding_date, assignmentId: w.assignment_id, role: w.role, city: w.city, done: w.done, failed: w.failed, untagged: w.untagged, bytes: Number(w.bytes) }))}
+         files={files.map((f) => ({ ...f, size_bytes: Number(f.size_bytes), created_at: new Date(f.created_at).toISOString() })) as never} />
+-      <p className="mt-6 text-[12px] text-muted">Need help? Read <Link className="underline" href="/team/handbook/how-to-upload">How to upload</Link> and the <Link className="underline" href="/team/handbook/48-hour-policy">48-hour policy</Link>.</p>
++      <p className="mt-6 text-[12px] text-muted">Need help? Read <Link className="underline" href="/team/handbook/how-to-upload">How to upload</Link>, <Link className="underline" href="/team/handbook/tagging-footage">Tagging footage</Link> and the <Link className="underline" href="/team/handbook/48-hour-policy">48-hour policy</Link>.</p>
+     </div>
+   );
+ }
+diff --git a/src/content/contract.ts b/src/content/contract.ts
+index 24e9d8a..f5e7e83 100644
+--- a/src/content/contract.ts
++++ b/src/content/contract.ts
+@@ -39,13 +39,18 @@ The Contractor is an independent contractor, not an employee, partner or agent o
+ 
+ ## 3. Standards on the day
+ - Arrive at the call time, ready to work, in plain black attire unless the coordinator says otherwise.
+-- Bring professional equipment suitable for the role, including a backup camera body, cameras that record to two cards where possible, spare batteries and enough storage for the full day.
++- Bring professional equipment suitable for the role, including a backup camera body, spare batteries and enough storage for the full day.
++- Follow the Company's shooting standard in the Team Handbook: for video, 4K at 23.976 fps (59.94 fps only for slow motion), the Company's house log profile and manual white balance, time-of-day timecode on every camera and recorder synchronised at call time, and dedicated audio (a lavalier microphone on the partner waiting at the altar and on the officiant, plus a recorder on the DJ or sound-board feed); for photography, RAW files and camera clocks synchronised at call time.
+ - Follow the timeline, shot list and instructions shared in the Company's platform and from the lead or coordinator on site.
+ - Be courteous and professional with the couple, their guests and venue staff. No alcohol or recreational drugs before or during the event.
+ - Follow venue rules and local laws, including any drone regulations.
+ 
+-## 4. Delivering the work
+-The Contractor will upload all original files from the wedding to the Company's platform within 48 hours after the wedding, keep a backup copy until the Company confirms the upload is complete, and then delete or return any remaining copies when the Company asks. Files must not be edited, culled or shared before they are uploaded unless the Company asks.
++## 4. Backups and delivering the work
++- Record to two memory cards at the same time in every camera that supports it, and keep cards in the Contractor's personal custody until they are copied.
++- By the end of the wedding day, keep at least three copies of all files in at least two separate physical locations (for example the original cards, a drive, and a second drive or cloud backup kept elsewhere).
++- Upload all original files to the Company's platform within 48 hours after the wedding, tagging each upload with the part of the day and the camera or recorder it came from, and adding markers where the Handbook asks for them.
++- Keep every copy until the Company confirms delivery is complete, then delete or return all remaining copies when the Company asks. Files must not be edited, culled or shared before they are uploaded unless the Company asks.
++- Tell the Company immediately if any file is lost, corrupted or can't be uploaded, and don't attempt recovery that could overwrite the original card.
+ 
+ ## 5. Ownership and use of the work
+ All photographs, footage and audio created under this Agreement are works made for hire for the Company. To the extent they are not, the Contractor assigns all rights in them to the Company. The Contractor may use a reasonable selection in their personal portfolio only after the couple has received their final gallery or film, with credit to the Company, and never for commercial licensing.
+@@ -60,8 +65,31 @@ The Company will pay the compensation above after the wedding, once all files ar
+ The Contractor must request any cancellation through the Company's platform with a reason and remains responsible for the wedding until a coordinator releases them. Cancellations requested within 14 days of the wedding are recorded on the Contractor's file and may affect future assignments, except in a genuine emergency. The Contractor may not send someone else in their place without the Company's written approval. If the Company or the couple cancels or moves the wedding, the Company will tell the Contractor as soon as possible and this Agreement ends for that date.
+ 
+ ## 9. Insurance and compliance
+-The Contractor will keep a valid driver's license and general liability insurance throughout the assignment and keep the documents in their profile up to date. The Contractor is responsible for their own equipment and for any loss or damage they cause through their own negligence.
++The Contractor will, at their own cost, keep throughout the assignment: a valid driver's license; general liability insurance of at least $1,000,000 per occurrence covering their wedding work; and any additional coverage a venue requires, including naming the Company (and the venue, if asked) as an additional insured. The Contractor is encouraged to insure their own equipment. The Contractor will keep current copies of these documents in their profile and will not work a wedding while any required document is expired.
+ 
+-## 10. General
++## 10. Equipment, damage and liability
++- The Contractor is solely responsible for their own equipment, vehicles and other property, including loss, theft or damage at the venue, in transit or anywhere else. The Company does not insure or reimburse the Contractor's property.
++- The Contractor is responsible for any damage to venue property, the property of the couple, guests or vendors, and for any injury, caused by the Contractor, their equipment (such as tripods, light stands, cables or drones) or anyone working with them, and will pay for or have their insurance cover that damage.
++- The Contractor will indemnify and hold harmless the Company from claims, losses and costs (including reasonable legal fees) arising from the Contractor's negligence, wilful misconduct or breach of this Agreement.
++- The Contractor will follow venue rules and safety instructions and secure their equipment so it does not create a hazard.
++
++## 11. General
+ This Agreement, the Team Handbook and any written change notices are the whole agreement for this wedding. If any part is unenforceable, the rest still applies. Typing their full name and confirming below is the Contractor's electronic signature and has the same effect as a handwritten signature.`,
+ };
++
++/** SHA-256 of the original built-in agreement (version 1) — if the live template is still that text, it is replaced outright. */
++export const LEGACY_CONTRACT_SHA = "7a4daa250377d6e7334cde361a863623a2e8ba4d118cc71bf2e558d79adabea9";
++
++/** Appended instead when a coordinator had already edited the agreement, so their wording is kept. */
++export const STANDARDS_ADDENDUM = `## Addendum — shooting standard, backups, insurance and liability
++These terms are added to the Agreement above. Where they conflict with it, these terms apply.
++
++**A. Shooting standard.** The Contractor will follow the Company's shooting standard in the Team Handbook: for video, 4K at 23.976 fps (59.94 fps only for slow motion), the Company's house log profile and manual white balance, time-of-day timecode on every camera and recorder synchronised at call time, and dedicated audio (a lavalier microphone on the partner waiting at the altar and on the officiant, plus a recorder on the DJ or sound-board feed); for photography, RAW files and camera clocks synchronised at call time.
++
++**B. Backups and delivery.** The Contractor will record to two memory cards at the same time in every camera that supports it; by the end of the wedding day keep at least three copies of all files in at least two separate physical locations; upload all original files within 48 hours, tagged with the part of the day and the camera or recorder they came from; keep every copy until the Company confirms delivery is complete, then delete or return them when asked; and tell the Company immediately if any file is lost or corrupted.
++
++**C. Ownership.** All photographs, footage and audio created under this Agreement are works made for hire for the Company; to the extent they are not, the Contractor assigns all rights in them to the Company.
++
++**D. Insurance.** The Contractor will keep, at their own cost, general liability insurance of at least $1,000,000 per occurrence covering their wedding work and any additional coverage a venue requires, including naming the Company as an additional insured when asked, and will keep current copies in their profile.
++
++**E. Equipment, damage and liability.** The Contractor is solely responsible for their own equipment, vehicles and property, including loss, theft or damage anywhere. The Contractor is responsible for damage to venue property, to the property of the couple, guests or vendors, and for any injury caused by the Contractor, their equipment or anyone working with them, and will indemnify and hold harmless the Company from claims, losses and costs (including reasonable legal fees) arising from the Contractor's negligence, wilful misconduct or breach of this Agreement.`;
+diff --git a/src/content/footage.ts b/src/content/footage.ts
+new file mode 100644
+index 0000000..3f453ec
+--- /dev/null
++++ b/src/content/footage.ts
+@@ -0,0 +1,83 @@
++/**
++ * Shared vocabulary for tagging footage. Used by the upload screen, the coordinator's footage view,
++ * the Dropbox folder layout and (later) the editing pipeline — so keep values stable; labels can change.
++ */
++export type Moment = { value: string; label: string; hint?: string };
++
++export const MOMENTS: Moment[] = [
++  { value: "getting_ready", label: "Getting ready" },
++  { value: "details", label: "Details & venue", hint: "Rings, dress, decor, venue exteriors" },
++  { value: "first_look", label: "First look" },
++  { value: "traditional", label: "Traditional ceremony", hint: "Engagement / introductions / cultural rites" },
++  { value: "ceremony", label: "Ceremony", hint: "Processional → recessional; add markers for vows, rings, kiss" },
++  { value: "family", label: "Family photos" },
++  { value: "portraits", label: "Couple portraits" },
++  { value: "cocktail", label: "Cocktail hour" },
++  { value: "entrances", label: "Grand entrance" },
++  { value: "first_dance", label: "First dance" },
++  { value: "parent_dances", label: "Parent dances" },
++  { value: "toasts", label: "Toasts & speeches" },
++  { value: "cake", label: "Cake cutting" },
++  { value: "money_spray", label: "Money spray" },
++  { value: "party", label: "Dance floor" },
++  { value: "send_off", label: "Send-off" },
++  { value: "broll", label: "B-roll" },
++  { value: "other", label: "Other" },
++];
++/** Photographers often dump a whole card at once, so photos may be tagged "whole day" and sorted by capture time later. */
++export const MIXED: Moment = { value: "mixed", label: "Whole day / mixed" };
++export const MOMENT_LABEL: Record<string, string> = Object.fromEntries([...MOMENTS, MIXED].map((m) => [m.value, m.label]));
++export const momentLabel = (v: string | null | undefined) => (v ? MOMENT_LABEL[v] ?? v : "Untagged");
++export const isMoment = (v: string, allowMixed: boolean) => MOMENTS.some((m) => m.value === v) || (allowMixed && v === MIXED.value);
++
++/** Markers inside a clip can also point at these finer beats. */
++export const MARKER_BEATS: Moment[] = [
++  { value: "processional", label: "Processional" },
++  { value: "vows", label: "Vows" },
++  { value: "rings", label: "Ring exchange" },
++  { value: "kiss", label: "Kiss" },
++  { value: "recessional", label: "Recessional" },
++  { value: "reaction", label: "Great reaction" },
++  { value: "speech_start", label: "Speech starts" },
++  { value: "highlight", label: "Highlight-worthy" },
++  { value: "problem", label: "Problem (audio/focus)" },
++];
++export const BEAT_LABEL: Record<string, string> = Object.fromEntries([...MARKER_BEATS, ...MOMENTS].map((m) => [m.value, m.label]));
++
++/** Which camera / recorder a file came from. Audio sources file under the "audio" category. */
++export const SOURCES = {
++  video: [
++    { value: "a_cam", label: "A-cam" },
++    { value: "b_cam", label: "B-cam" },
++    { value: "c_cam", label: "C-cam" },
++    { value: "drone", label: "Drone" },
++    { value: "audio_partner", label: "Audio · lav on partner at altar" },
++    { value: "audio_officiant", label: "Audio · lav on officiant" },
++    { value: "audio_dj", label: "Audio · DJ / board recorder" },
++    { value: "audio_other", label: "Audio · other recorder" },
++  ],
++  photo: [
++    { value: "body_1", label: "Main body" },
++    { value: "body_2", label: "Second body" },
++  ],
++} as const;
++export const SOURCE_LABEL: Record<string, string> = Object.fromEntries([...SOURCES.video, ...SOURCES.photo].map((s) => [s.value, s.label]));
++export const isAudioSource = (s: string | null | undefined) => !!s && s.startsWith("audio_");
++export const isSource = (kind: "photo" | "video" | "document", v: string) => kind !== "document" && SOURCES[kind].some((s) => s.value === v);
++
++/** Parses "1:02:03", "02:03", "2:03.5" or plain seconds into whole seconds. */
++export function parseTimecode(input: string): number | null {
++  const s = input.trim();
++  if (!s) return null;
++  if (/^\d+(\.\d+)?$/.test(s)) return Math.floor(Number(s));
++  const m = s.match(/^(?:(\d{1,2}):)?(\d{1,2}):(\d{1,2})(?:[.;:](\d{1,2}))?$/);
++  if (!m) return null;
++  const [h, mi, se] = [Number(m[1] ?? 0), Number(m[2]), Number(m[3])];
++  if (mi > 59 || se > 59) return null;
++  return h * 3600 + mi * 60 + se;
++}
++export function formatTimecode(sec: number) {
++  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
++  const pad = (n: number) => String(n).padStart(2, "0");
++  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
++}
+diff --git a/src/content/handbook.ts b/src/content/handbook.ts
+index f8d776a..822a2ec 100644
+--- a/src/content/handbook.ts
++++ b/src/content/handbook.ts
+@@ -124,6 +124,132 @@ If anything goes wrong, stay calm, solve what you can, and message your coordina
+       },
+     ],
+   },
++  {
++    slug: "required-standards",
++    title: "Required Standards & Agreements",
++    description: "The shooting standard, footage tagging, backups and your legal responsibilities. You accept these before taking weddings.",
++    icon: "ShieldCheck",
++    articles: [
++      {
++        slug: "shooting-standard",
++        title: "The shooting standard (every camera, every wedding)",
++        summary: "Same frame rate, same picture profile, synced timecode and dedicated audio — so footage from every shooter cuts together.",
++        minutes: 5,
++        body: `Our films are assembled from several shooters' cameras, and more and more of the first assembly is automated. That only works if every file follows the same standard. **This is required, not a suggestion** — footage that doesn't follow it costs hours in the edit and may delay your payment.
++
++## Video — every camera body
++| Setting | Standard |
++|---|---|
++| Resolution | 4K UHD (3840 × 2160) |
++| Frame rate | **23.976 fps** for everything at normal speed |
++| Slow motion | **59.94 fps** (conformed to 23.976 in the edit) — only for movement: entrances, dances, send-off |
++| Shutter | 1/50 at 23.976; 1/125 at 59.94. Use ND outdoors instead of raising the shutter |
++| Picture profile | Our house log profile for your brand (below). Never bake in a LUT or a creative look |
++| White balance | **Manual Kelvin**, set per location — never auto. Match the other shooters when you share a room |
++| Codec | Highest 10-bit 4:2:2 option your camera has (e.g. XAVC S-I, All-I, ProRes 422) |
++
++**House log profiles:** Sony S-Log3 / S-Gamut3.Cine · Canon C-Log3 / Cinema Gamut · Panasonic V-Log · Fujifilm F-Log2 · Nikon N-Log · Blackmagic Film Gen 5. Exposure: expose to the right (+1 to +1.7 stops on log), protect skin highlights.
++
++## Timecode — all cameras and recorders
++- Run **time-of-day timecode** on every camera and audio recorder.
++- If you have sync boxes (Tentacle, Deity, etc.), jam-sync them at call time and again after lunch.
++- No sync box? Set every camera and recorder clock to network time (time.gov) at call time, **and** record a visible slate clap in front of all running cameras and recorders at the start of the ceremony and the speeches.
++- Photographers: follow the [time-sync procedure](/team/handbook/time-sync) — the same clock is used to line photos up with the film.
++
++## Audio — dedicated, never camera-only
++1. **Lav on the partner waiting at the altar** (usually the groom) — recording locally, 32-bit float if your recorder supports it.
++2. **Lav on the officiant.**
++3. **Recorder on the DJ / soundboard feed** (or on the lectern) for speeches and the first dance.
++4. On-camera scratch audio **always on** — it's how the edit syncs everything.
++5. 48 kHz, 24-bit (or 32-bit float). Monitor with headphones during vows and speeches.
++
++## Photography
++- RAW only, **dual card slots recording to both cards** (backup/mirror mode, not overflow).
++- Camera clocks synced at call time (see time-sync).
++- Don't cull or delete in camera.
++
++## Before you leave the venue
++Check that every card has recorded to both slots, and that audio files exist for the ceremony and the speeches. If anything failed, tell your coordinator that night.`,
++      },
++      {
++        slug: "tagging-footage",
++        title: "Tagging your footage and adding markers",
++        summary: "Tag every upload with the moment and the camera it came from, and mark key beats inside long clips.",
++        minutes: 3,
++        body: `Editors (and our editing pipeline) find footage by **moment** and **camera**, not by file name. Tagging takes seconds when you upload and saves the editor hours.
++
++## When you upload
++1. Open **Uploads** and pick the wedding.
++2. In **Tag this batch**, choose the **moment** (Getting ready, Ceremony, Toasts & speeches, First dance…) and the **camera or recorder** (A-cam, B-cam, Drone, Audio · lav on officiant…).
++3. Add the files for that moment and camera. Then change the tags and add the next batch.
++4. Video can't be uploaded without a moment. Photographers can tag a full card as **Whole day / mixed** — we sort photos by capture time, which is why the time-sync is required.
++
++Files go into the company Dropbox in matching folders, e.g. \`Weddings / 2026-10-10 Ade & Tolu / Video / Toasts & speeches / Daniel Kim · B-cam\`.
++
++## Markers inside a clip
++For long clips — the full ceremony or the speeches — add markers so the editor can jump straight to the beats:
++- In the uploaded files list, click **Add** in the *Markers* column.
++- Type the time inside the clip (\`12:31\` or \`1:02:45\`) and choose what happens: *Vows, Ring exchange, Kiss, Speech starts, Great reaction, Problem (audio/focus)…*
++- Mark problems too. A note like "lav rustle 3:10–3:40" saves a lot of searching.
++
++## In-camera markers
++If your camera can drop shot marks or flags (Sony Shot Mark, Canon/Panasonic clip marks, a slate clap on the recorder), use them on the day and tick **I dropped in-camera markers** when you upload. The editor reads them from the file.
++
++## Wrong tag?
++Change it any time from the *Moment* column — the file moves to the right Dropbox folder automatically.`,
++      },
++      {
++        slug: "backups-and-delivery",
++        title: "Backups: dual cards and three copies in two places",
++        summary: "A wedding can't be reshot. How to protect files from the moment you press record until delivery is confirmed.",
++        minutes: 3,
++        body: `Losing a wedding's files is the one mistake we can't fix. These rules are part of your agreement for every wedding.
++
++## On the day
++- **Record to two cards at once** in every camera that supports it (mirror/backup mode, not overflow or RAW+JPEG split).
++- Audio recorders: record a safety track or a second recorder for vows and speeches.
++- Never format a card at the venue. Full cards go into a labelled, zipped card wallet that stays on your body — not in a car or a bag left under a table.
++
++## The same night: three copies in two places
++1. **Copy 1:** the original cards (don't format them yet).
++2. **Copy 2:** an external drive or your computer.
++3. **Copy 3:** a different physical place — a second drive kept at another address, or a cloud backup.
++
++Start your upload to Visual Weddings within 24 hours and finish within 48. Once a file shows **Uploaded**, it has been checked: it landed in the company Dropbox at full size.
++
++## How long to keep your copies
++Keep **all copies until your coordinator confirms delivery is complete** (you'll get a notification). After that, delete or return every copy when we ask — the files belong to the couple's wedding and to Visual Weddings, not to your archive.
++
++## If something goes wrong
++Corrupt card, failed upload, lost drive: message your coordinator **immediately**. Don't try recovery software that writes to the card — leave it untouched; we'll arrange professional recovery.`,
++      },
++      {
++        slug: "contract-insurance-liability",
++        title: "Your agreement, insurance and liability",
++        summary: "Who owns the footage, the insurance you must carry, and responsibility for damage to equipment or property.",
++        minutes: 4,
++        body: `You sign an Independent Contractor Agreement for every wedding (when you accept a wedding or an offer). Here is what it means in plain English. The agreement itself is what counts — read it before you sign.
++
++## The footage belongs to Visual Weddings
++Everything you shoot, record or edit for a Visual Weddings wedding is a **work made for hire** for Visual Weddings. You assign any rights you might have to the company. You may show a reasonable selection in your personal portfolio only after the couple has received their gallery or film, with credit to Visual Weddings, and never for stock or commercial licensing.
++
++## Insurance you must carry
++- **General liability insurance** of at least **$1,000,000 per occurrence** for your wedding work. Many venues require it and may ask for Visual Weddings to be named as an additional insured — we'll tell you when.
++- **Equipment insurance** for your own gear. We strongly recommend it; if you don't carry it, the risk of loss is yours alone.
++- Keep your certificate up to date under **Licenses**. Expired insurance means you can't be staffed.
++
++## You're responsible for your equipment and for damage you cause
++- **Your equipment is your responsibility.** Loss, theft or damage to your cameras, lenses, drones, lights, cards, vehicles or other property — at the venue, in transit or anywhere else — is not covered by Visual Weddings.
++- **Damage you cause is your responsibility.** If you, your equipment (tripods, light stands, cables, drones) or anyone working with you damages venue property, a guest's property or injures someone, you are responsible for it and your insurance should respond. You agree to cover Visual Weddings for claims that come from your negligence or from breaking the agreement.
++- Tape down cables, sandbag light stands, keep bags out of walkways, and follow venue rules and drone laws.
++
++## Footage, backups and standards
++The agreement also commits you to the [shooting standard](/team/handbook/shooting-standard), [tagging](/team/handbook/tagging-footage) and [backup rules](/team/handbook/backups-and-delivery), and to uploading within 48 hours.
++
++> This page summarises the agreement; it isn't legal or insurance advice. If you're unsure what coverage you need, ask your insurance broker.`,
++      },
++    ],
++  },
+   {
+     slug: "photographer-guidelines",
+     title: "Photographer Guidelines",
+@@ -203,10 +329,13 @@ Aim for one formal lined-up shot, one candid "fun" frame and a few small-group s
+         summary: "One-page summary of settings, must-have shots and audio.",
+         audience: "video",
+         minutes: 3,
+-        body: `- **Resolution:** 4K, 23.976 or 25 fps to match the editor's timeline. 60 fps for slow-motion moments.
+-- **Picture profile:** a flat log profile is preferred; never bake in a LUT.
+-- **Shutter:** follow the 180° rule (1/50 at 25 fps) with ND outdoors.
+-- **Audio:** lav on the officiant or the partner waiting at the altar, plus a recorder on the podium/DJ feed.
++        body: `Full details: [the shooting standard](/team/handbook/shooting-standard).
++
++- **Resolution:** 4K UHD at **23.976 fps**. 59.94 fps only for slow-motion moments.
++- **Picture profile:** our house log profile for your brand; manual Kelvin white balance; never bake in a LUT.
++- **Shutter:** 1/50 at 23.976 (1/125 at 59.94) with ND outdoors.
++- **Timecode:** time-of-day on every camera and recorder, jam-synced or clock-synced at call time, plus a slate clap.
++- **Audio:** lav on the partner waiting at the altar **and** on the officiant, plus a recorder on the DJ/board feed. Scratch audio always on.
+ - **Must-have shots:** processional, vows, ring exchange, kiss, recessional, first dance, toasts in full.`,
+       },
+       {
+@@ -358,8 +487,8 @@ If a couple asks for something outside the package, smile and say *"Let me check
+         minutes: 2,
+         body: `- Shoot **RAW** (CR3, NEF, ARW, RAF are all fine). JPEG-only uploads are rejected.
+ - Do **not** cull or delete in camera. Upload everything; editors cull.
+-- Folder name: \`YYYY-MM-DD_Couple_ROLE\` — for example \`2026-10-18_Sarah-James_LEAD\`.
+-- Keep a backup of your cards until the gallery has been delivered.`,
++- Record to **both card slots** (mirror mode) and keep three copies in two places until delivery is confirmed — see [backup rules](/team/handbook/backups-and-delivery).
++- The app files your uploads into the right Dropbox folder for you, so you don't need to rename folders.`,
+       },
+     ],
+   },
+@@ -378,7 +507,7 @@ If a couple asks for something outside the package, smile and say *"Let me check
+         body: `- Hold every shot for **at least 8 seconds**.
+ - Capture the ceremony and toasts **uninterrupted** from a locked-off camera.
+ - Deliver every clip and every audio file — never trim on set.
+-- Folder name: \`YYYY-MM-DD_Couple_VIDEO\`, with sub-folders \`A-CAM\`, \`B-CAM\`, \`AUDIO\`, \`DRONE\`.`,
++- Follow [the shooting standard](/team/handbook/shooting-standard) and [tag every upload](/team/handbook/tagging-footage) with its moment and camera — the app builds the Dropbox folders for you.`,
+       },
+       {
+         slug: "drone-faq",
+@@ -417,10 +546,11 @@ If a couple asks for something outside the package, smile and say *"Let me check
+         summary: "Step-by-step for photo and video uploads.",
+         minutes: 3,
+         body: `1. Open **Uploads** and pick the wedding.
+-2. Choose the category — *RAW*, *Edited*, *Highlights* for photo; *Footage*, *Ceremony*, *Reception* for video.
+-3. Drag files in or click **Select files**. You can add hundreds at once.
+-4. Keep the tab open until every file shows **Uploaded**. Video files then show **Processing** while we generate previews.
+-5. When finished, the wedding moves to *Delivered* and your payment request opens automatically.`,
++2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*.
++3. In **Tag this batch**, choose the moment and the camera or recorder ([how tagging works](/team/handbook/tagging-footage)). Video needs a moment before you can add files.
++4. Drag files in or click **Select files**. You can add hundreds at once; large videos upload in pieces and resume on their own after a dropped connection.
++5. Keep the tab open until every file shows **Uploaded** — that means it was checked and is safe in the company Dropbox. Video files then show **Processing**.
++6. Add markers to long clips, then keep your backups until your coordinator confirms delivery ([backup rules](/team/handbook/backups-and-delivery)).`,
+       },
+     ],
+   },
+diff --git a/src/content/standards.ts b/src/content/standards.ts
+new file mode 100644
+index 0000000..27c9e70
+--- /dev/null
++++ b/src/content/standards.ts
+@@ -0,0 +1,44 @@
++/**
++ * The standards every photographer and videographer accepts before taking weddings.
++ * Bump STANDARDS_VERSION when these change materially — everyone is asked to accept again.
++ */
++export const STANDARDS_VERSION = 1;
++
++export const STANDARDS: { title: string; href: string; points: string[] }[] = [
++  {
++    title: "Shooting standard",
++    href: "/team/handbook/shooting-standard",
++    points: [
++      "Video: 4K at 23.976 fps (59.94 fps only for slow motion), our house log profile, manual Kelvin white balance.",
++      "Time-of-day timecode on every camera and recorder, synced at call time, plus a slate clap.",
++      "Dedicated audio: lav on the partner at the altar and on the officiant, plus a DJ/board recorder.",
++      "Photo: RAW only, camera clocks synced at call time.",
++    ],
++  },
++  {
++    title: "Tagging footage",
++    href: "/team/handbook/tagging-footage",
++    points: [
++      "Tag every upload with the moment it covers and the camera or recorder it came from.",
++      "Add markers for key beats in long clips (vows, speeches, problems) and use in-camera markers where you can.",
++    ],
++  },
++  {
++    title: "Backups",
++    href: "/team/handbook/backups-and-delivery",
++    points: [
++      "Record to two cards at once in every camera that supports it.",
++      "Three copies of every file in two separate places by the end of the night.",
++      "Upload within 48 hours; keep every copy until your coordinator confirms delivery.",
++    ],
++  },
++  {
++    title: "Agreement, insurance & liability",
++    href: "/team/handbook/contract-insurance-liability",
++    points: [
++      "Everything you shoot is work made for hire — it belongs to Visual Weddings.",
++      "Carry general liability insurance (at least $1M per occurrence) and keep the certificate current.",
++      "You're responsible for your own equipment, and for damage you, your gear or your assistants cause at the event or venue.",
++    ],
++  },
++];
+diff --git a/src/lib/actions/footage.ts b/src/lib/actions/footage.ts
+new file mode 100644
+index 0000000..3c19619
+--- /dev/null
++++ b/src/lib/actions/footage.ts
+@@ -0,0 +1,33 @@
++"use server";
++import { revalidatePath } from "next/cache";
++import { requireUser } from "@/lib/auth";
++import * as up from "@/lib/services/uploads";
++import { parseTimecode } from "@/content/footage";
++import type { ActionResult } from "./types";
++
++const refresh = () => { revalidatePath("/team/uploads", "layout"); revalidatePath("/admin/weddings", "layout"); };
++
++/** Change the moment / camera a file is tagged with (uploader or coordinator). */
++export async function retagUploadAction(id: string, input: { moment?: string | null; source?: string | null }): Promise<ActionResult> {
++  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const r = await up.retagUpload(user, id, input);
++  if (r.ok) refresh();
++  return { ok: r.ok, message: r.message };
++}
++
++/** Add a timecode marker inside a clip, e.g. vows at 12:31. */
++export async function addMarkerAction(uploadId: string, input: { time: string; beat: string; note?: string }): Promise<ActionResult<{ id: string; at: number }>> {
++  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const at = parseTimecode(input.time);
++  if (at === null) return { ok: false, message: "Enter a time like 12:31 or 1:02:45.", fieldErrors: { time: "Use mm:ss or h:mm:ss" } };
++  const r = await up.addMarker(user, uploadId, { at, beat: input.beat, note: input.note });
++  if (r.ok) refresh();
++  return r.ok ? { ok: true, message: r.message, data: { id: r.id, at } } : { ok: false, message: r.message };
++}
++
++export async function deleteMarkerAction(markerId: string): Promise<ActionResult> {
++  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const r = await up.deleteMarker(user, markerId);
++  if (r.ok) refresh();
++  return r;
++}
+diff --git a/src/lib/actions/team.ts b/src/lib/actions/team.ts
+index a0a8ad7..e521b18 100644
+--- a/src/lib/actions/team.ts
++++ b/src/lib/actions/team.ts
+@@ -9,6 +9,7 @@ import * as up from "@/lib/services/uploads";
+ import { markRead, markUnread } from "@/lib/services/notifications";
+ import { sendMessage, startConversation, addParticipants, removeParticipant, messageClient, joinClientThread } from "@/lib/services/messages";
+ import { geocodeMemberHome } from "@/lib/services/geo";
++import { acceptStandards } from "@/lib/services/standards";
+ import type { ActionResult } from "./types";
+ 
+ async function me() {
+@@ -32,11 +33,12 @@ export async function contractPreviewAction(assignmentId: string): Promise<Actio
+   return c ? { ok: true, data: c } : { ok: false, message: "This wedding is no longer available." };
+ }
+ 
+-export async function acceptOpportunityAction(assignmentId: string, sig: SignInput): Promise<ActionResult<{ status: string; weddingId: string; stale?: boolean }>> {
++export async function acceptOpportunityAction(assignmentId: string, sig: SignInput): Promise<ActionResult<{ status: string; weddingId: string; stale?: boolean; needsStandards?: boolean }>> {
+   const { member } = await me();
+   const r = await team.acceptOpportunity(member, assignmentId, { ...sig, ...(await signatureMeta()) });
+   revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
+-  if (!r.ok) return { ok: false, message: r.message, fieldErrors: "field" in r && r.field ? { name: r.message } : undefined, data: "stale" in r ? { status: "", weddingId: "", stale: true } : undefined };
++  if (!r.ok) return { ok: false, message: r.message, fieldErrors: "field" in r && r.field ? { name: r.message } : undefined,
++    data: "stale" in r ? { status: "", weddingId: "", stale: true } : "needsStandards" in r ? { status: "", weddingId: "", needsStandards: true } : undefined };
+   return { ok: true, message: r.status === "pending" ? "Signed — awaiting coordinator approval" : `You're confirmed for ${r.couple}!`, data: { status: r.status, weddingId: r.weddingId } };
+ }
+ export async function signExistingAction(assignmentId: string, sig: SignInput): Promise<ActionResult> {
+@@ -139,18 +141,32 @@ export async function submitLicenseAction(input: { docType: string; label?: stri
+   return { ok: true, message: "Submitted for review" };
+ }
+ 
++/* Team standards */
++export async function acceptStandardsAction(input: { name: string; agree: boolean }): Promise<ActionResult> {
++  const user = await requireUser(["photographer", "videographer"]);
++  const member = await team.getMember(user.id);
++  if (!member) return { ok: false, message: "Team profile not found." };
++  const r = await acceptStandards(member, { ...input, ...(await signatureMeta()) });
++  revalidatePath("/team", "layout");
++  return r.ok ? { ok: true, message: "Thanks — you've accepted the team standards" } : { ok: false, message: r.message };
++}
++
+ /* Uploads */
+-export async function beginUploadAction(input: { weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; filename: string; size: number; mime: string; retryOf?: string | null }) {
++export async function beginUploadAction(input: up.BeginInput) {
+   const user = await requireUser();
+   if (input.kind === "photo" && input.size > 200 * 1024 * 1024) return { ok: false as const, message: `${input.filename} is larger than 200 MB.` };
+   if (input.kind === "video" && input.size > 100 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 100 GB.` };
+-  const r = await up.beginUpload(user.id, input);
+-  return { ok: true as const, ...r };
++  try {
++    const r = await up.beginUpload(user.id, input);
++    return { ok: true as const, ...r };
++  } catch (e) {
++    return { ok: false as const, message: e instanceof Error ? e.message : "Couldn't start the upload." };
++  }
+ }
+ export async function finishUploadAction(id: string, result: { ok: boolean; error?: string; durationSeconds?: number | null }) {
+   const user = await requireUser();
+-  const status = await up.finishUpload(user.id, id, result);
+-  return { ok: true, status };
++  const r = await up.finishUpload(user.id, id, result);
++  return { ok: r.status !== "failed", status: r.status, error: r.error };
+ }
+ export async function uploadBatchDoneAction(weddingId: string | null, okCount: number, failCount: number, kind: string) {
+   const user = await requireUser();
+diff --git a/src/lib/client-upload.ts b/src/lib/client-upload.ts
+index d8f0739..679eefc 100644
+--- a/src/lib/client-upload.ts
++++ b/src/lib/client-upload.ts
+@@ -1,8 +1,12 @@
+ "use client";
+ 
+ import { beginUploadAction, finishUploadAction } from "@/lib/actions/team";
++import { sendXhr, dropboxSessionUpload } from "@/lib/dropbox-upload";
+ 
+-export type UploadMeta = { weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null };
++export type UploadMeta = {
++  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null;
++  moment?: string | null; source?: string | null; cameraMarkers?: boolean;
++};
+ export type UploadHandle = { id: string | null; promise: Promise<{ ok: boolean; id: string | null; error?: string; key?: string }>; cancel: () => void };
+ 
+ /** Reads a video's duration in the browser (best effort). */
+@@ -20,8 +24,9 @@ export function videoDuration(file: File): Promise<number | null> {
+ }
+ 
+ /**
+- * Uploads one file: asks the server for a target, then either PUTs to signed storage (real progress)
+- * or simulates the transfer when the mock storage provider is active.
++ * Uploads one file: asks the server for a target, then sends it straight to storage — a signed PUT
++ * (Supabase), a Dropbox temporary upload link (≤140 MB) or a chunked Dropbox upload session (bigger
++ * files) — or simulates the transfer when the mock storage provider is active.
+  */
+ export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: number) => void, onId?: (id: string) => void): UploadHandle {
+   let cancelled = false;
+@@ -36,18 +41,13 @@ export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: numbe
+     onId?.(begin.id);
+     const durationP = meta.kind === "video" ? videoDuration(file) : Promise.resolve(null);
+     let result: { ok: boolean; error?: string };
+-    if (begin.target.mode === "put") {
+-      const target = begin.target;
+-      result = await new Promise((resolve) => {
+-        xhr = new XMLHttpRequest();
+-        xhr.open("PUT", target.url);
+-        Object.entries(target.headers).forEach(([k, v]) => xhr!.setRequestHeader(k, v));
+-        xhr.upload.onprogress = (e) => e.lengthComputable && onProgress((e.loaded / e.total) * 100);
+-        xhr.onload = () => resolve(xhr!.status < 300 ? { ok: true } : { ok: false, error: `Storage rejected the file (${xhr!.status})` });
+-        xhr.onerror = () => resolve({ ok: false, error: "Network error — check your connection" });
+-        xhr.onabort = () => resolve({ ok: false, error: "Upload cancelled" });
+-        xhr.send(file);
+-      });
++    const target = begin.target;
++    if (target.mode === "put" || target.mode === "post") {
++      const r = await sendXhr(target.mode === "put" ? "PUT" : "POST", target.url, target.headers, file, (loaded) => onProgress((loaded / Math.max(1, file.size)) * 100), (x) => { xhr = x; });
++      result = r.status === 0 ? { ok: false, error: r.aborted ? "Upload cancelled" : "Network error — check your connection" }
++        : r.status < 300 ? { ok: true } : { ok: false, error: `Storage rejected the file (${r.status})` };
++    } else if (target.mode === "dropbox-session") {
++      result = await dropboxSessionUpload(file, target, onProgress, (x) => { xhr = x; }, () => cancelled);
+     } else {
+       // Demo storage: simulate a realistic transfer speed (~25–60 MB/s, capped so demos stay snappy).
+       const seconds = Math.min(meta.kind === "video" ? 9 : 4, Math.max(0.8, file.size / (40 * 1024 * 1024)));
+@@ -66,8 +66,11 @@ export function uploadFile(file: File, meta: UploadMeta, onProgress: (pct: numbe
+       });
+     }
+     const durationSeconds = await durationP;
+-    await finishUploadAction(begin.id, { ok: result.ok, error: result.error, durationSeconds });
+-    return { ok: result.ok, id: begin.id, error: result.error, key: begin.key };
++    // The server double-checks the file landed at full size before marking it uploaded.
++    const fin = await finishUploadAction(begin.id, { ok: result.ok, error: result.error, durationSeconds });
++    const ok = result.ok && fin.ok;
++    return { ok, id: begin.id, error: ok ? undefined : result.error ?? fin.error ?? "Upload failed", key: begin.key };
+   })().catch((e) => ({ ok: false, id: handle.id, error: e instanceof Error ? e.message : "Upload failed" }));
+   return handle;
+ }
++
+diff --git a/src/lib/dropbox-upload.ts b/src/lib/dropbox-upload.ts
+new file mode 100644
+index 0000000..f368a55
+--- /dev/null
++++ b/src/lib/dropbox-upload.ts
+@@ -0,0 +1,86 @@
++/**
++ * Browser-side transfer helpers (no app imports, so they can be unit-tested in Node with a fake transport).
++ */
++export type XhrResult = { status: number; text: string; aborted: boolean };
++
++/** One XHR request with upload progress (fetch has no upload progress in most browsers). */
++export function sendXhr(method: string, url: string, headers: Record<string, string>, body: Blob, onLoaded: (bytes: number) => void, onXhr: (x: XMLHttpRequest) => void): Promise<XhrResult> {
++  return new Promise((resolve) => {
++    const x = new XMLHttpRequest();
++    onXhr(x);
++    x.open(method, url);
++    Object.entries(headers).forEach(([k, v]) => x.setRequestHeader(k, v));
++    x.upload.onprogress = (e) => onLoaded(e.loaded);
++    x.onload = () => resolve({ status: x.status, text: x.responseText, aborted: false });
++    x.onerror = () => resolve({ status: 0, text: "", aborted: false });
++    x.onabort = () => resolve({ status: 0, text: "", aborted: true });
++    x.send(body);
++  });
++}
++
++/** Dropbox wants non-ASCII characters in the Dropbox-API-Arg header escaped as \uXXXX. */
++export function headerJson(v: unknown) {
++  return JSON.stringify(v).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0"));
++}
++
++const CONTENT = "https://content.dropboxapi.com/2/files";
++
++/**
++ * Chunked upload straight to Dropbox (start → append… → finish). Each chunk is retried up to 4 times,
++ * and if Dropbox reports a different offset (e.g. a chunk landed but the reply was lost) we continue from there.
++ */
++export async function dropboxSessionUpload(
++  file: Blob, target: { token: string; path: string; chunkSize: number },
++  onProgress: (pct: number) => void, onXhr: (x: XMLHttpRequest) => void, isCancelled: () => boolean,
++  send: typeof sendXhr = sendXhr, wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
++): Promise<{ ok: boolean; error?: string }> {
++  const auth = { Authorization: `Bearer ${target.token}`, "Content-Type": "application/octet-stream" };
++  let sessionId: string | null = null;
++  let offset = 0;
++  const report = (inChunk: number) => onProgress(Math.min(99.5, ((offset + inChunk) / Math.max(1, file.size)) * 100));
++
++  while (true) {
++    if (isCancelled()) return { ok: false, error: "Upload cancelled" };
++    const end = Math.min(file.size, offset + target.chunkSize);
++    const last = end >= file.size;
++    const chunk = file.slice(offset, end);
++    let url: string, arg: unknown;
++    if (!sessionId) { url = `${CONTENT}/upload_session/start`; arg = { close: false }; }
++    else if (!last) { url = `${CONTENT}/upload_session/append_v2`; arg = { cursor: { session_id: sessionId, offset }, close: false }; }
++    else { url = `${CONTENT}/upload_session/finish`; arg = { cursor: { session_id: sessionId, offset }, commit: { path: target.path, mode: "add", autorename: false, mute: true, strict_conflict: false } }; }
++
++    let r: XhrResult | null = null;
++    for (let attempt = 0; attempt < 4; attempt++) {
++      r = await send("POST", url, { ...auth, "Dropbox-API-Arg": headerJson(arg) }, chunk, report, onXhr);
++      if (r.aborted || isCancelled()) return { ok: false, error: "Upload cancelled" };
++      if (r.status === 0 || r.status === 429 || r.status >= 500) { await wait(1000 * 2 ** attempt); continue; }
++      break;
++    }
++    if (!r || r.status === 0) return { ok: false, error: "Network error — check your connection" };
++    if (r.status === 401) return { ok: false, error: "The upload pass expired — press Retry." };
++    if (r.status === 409) {
++      // incorrect_offset: Dropbox already has more (or less) than we think — resume from its offset
++      try {
++        const err = JSON.parse(r.text)?.error;
++        const correct = err?.correct_offset ?? err?.lookup_failed?.correct_offset;
++        if (typeof correct === "number" && sessionId) { offset = correct; continue; }
++      } catch { /* fall through */ }
++      return { ok: false, error: `Dropbox refused the file (${r.text.slice(0, 120) || r.status})` };
++    }
++    if (r.status >= 300) return { ok: false, error: `Dropbox error ${r.status}` };
++    if (!sessionId) {
++      try { sessionId = JSON.parse(r.text).session_id; } catch { /* handled below */ }
++      if (!sessionId) return { ok: false, error: "Dropbox didn't start the upload — press Retry." };
++      offset = end;
++      // A file that fit in one chunk still needs a finish call (with an empty body).
++      if (last) {
++        const fin = await send("POST", `${CONTENT}/upload_session/finish`, { ...auth, "Dropbox-API-Arg": headerJson({ cursor: { session_id: sessionId, offset }, commit: { path: target.path, mode: "add", autorename: false, mute: true, strict_conflict: false } }) }, new Blob([]), report, onXhr);
++        if (fin.status >= 200 && fin.status < 300) { onProgress(100); return { ok: true }; }
++        return { ok: false, error: fin.status === 0 ? "Network error — check your connection" : `Dropbox error ${fin.status}` };
++      }
++      continue;
++    }
++    if (last) { onProgress(100); return { ok: true }; }
++    offset = end;
++  }
++}
+diff --git a/src/lib/dropbox.ts b/src/lib/dropbox.ts
+new file mode 100644
+index 0000000..3e0e68e
+--- /dev/null
++++ b/src/lib/dropbox.ts
+@@ -0,0 +1,111 @@
++import "server-only";
++
++/**
++ * Minimal Dropbox API client for the company footage account.
++ *
++ * Auth: a long-lived refresh token (from `npx tsx scripts/dropbox-auth.ts`) is exchanged for
++ * short-lived (4h) access tokens. The full-scope token never leaves the server. For large browser
++ * uploads we mint a separate token narrowed to `files.content.write`, so whoever holds it can add
++ * files but can't list or download anyone's footage.
++ *
++ * Env: DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN, optional DROPBOX_ROOT (default "/Weddings").
++ */
++const API = "https://api.dropboxapi.com/2";
++const TOKEN_URL = "https://api.dropboxapi.com/oauth2/token";
++
++export type DropboxConfig = { appKey: string; appSecret: string; refreshToken: string; root: string };
++
++export function dropboxConfig(env: Record<string, string | undefined> = process.env): DropboxConfig | null {
++  const { DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN, DROPBOX_ROOT } = env;
++  if (!DROPBOX_APP_KEY || !DROPBOX_APP_SECRET || !DROPBOX_REFRESH_TOKEN) return null;
++  const root = "/" + (DROPBOX_ROOT ?? "Weddings").replace(/^\/+|\/+$/g, "");
++  return { appKey: DROPBOX_APP_KEY, appSecret: DROPBOX_APP_SECRET, refreshToken: DROPBOX_REFRESH_TOKEN, root: root === "/" ? "" : root };
++}
++
++export class DropboxError extends Error {
++  constructor(message: string, public status: number, public tag: string | null, public body: unknown) { super(message); }
++}
++
++export { headerJson } from "./dropbox-upload";
++
++/** Makes a single folder/file name safe for Dropbox and readable for editors. */
++export function safeName(s: string, max = 80) {
++  const cleaned = s.normalize("NFC").replace(/\s*\/\s*/g, " - ").replace(/[\\:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().replace(/[. ]+$/, "");
++  return (cleaned || "untitled").slice(0, max).trim();
++}
++
++type Fetch = typeof fetch;
++type Cached = { token: string; expires: number };
++
++export class DropboxClient {
++  private cache = new Map<string, Cached>();
++  constructor(public cfg: DropboxConfig, private fetcher: Fetch = (...a) => fetch(...a)) {}
++
++  /** Short-lived access token. `scope` narrows it (Dropbox allows a subset of the app's scopes on refresh). */
++  async accessToken(scope?: string): Promise<{ token: string; expiresAt: number }> {
++    const key = scope ?? "*";
++    const hit = this.cache.get(key);
++    if (hit && hit.expires - Date.now() > 10 * 60_000) return { token: hit.token, expiresAt: hit.expires };
++    const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: this.cfg.refreshToken, client_id: this.cfg.appKey, client_secret: this.cfg.appSecret });
++    if (scope) body.set("scope", scope);
++    const res = await this.fetcher(TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
++    const json = (await res.json().catch(() => ({}))) as { access_token?: string; expires_in?: number; error_description?: string; error?: string };
++    if (!res.ok || !json.access_token) throw new DropboxError(`Dropbox sign-in failed: ${json.error_description ?? json.error ?? res.status}`, res.status, json.error ?? null, json);
++    const expires = Date.now() + (json.expires_in ?? 14400) * 1000;
++    this.cache.set(key, { token: json.access_token, expires });
++    return { token: json.access_token, expiresAt: expires };
++  }
++
++  /** RPC-style call (JSON in, JSON out). */
++  async rpc<T>(endpoint: string, arg: unknown): Promise<T> {
++    const { token } = await this.accessToken();
++    const res = await this.fetcher(`${API}/${endpoint}`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(arg) });
++    const text = await res.text();
++    let json: unknown = null;
++    try { json = text ? JSON.parse(text) : null; } catch { /* plain-text error */ }
++    if (!res.ok) {
++      const summary = (json as { error_summary?: string } | null)?.error_summary ?? text.slice(0, 200);
++      const tag = summary?.split("/")[0] ?? null;
++      throw new DropboxError(`Dropbox ${endpoint} failed: ${summary || res.status}`, res.status, tag, json);
++    }
++    return json as T;
++  }
++
++  /** One-shot upload URL for files ≤150 MB; valid 4 hours, no token needed by the browser. */
++  async temporaryUploadLink(path: string) {
++    const r = await this.rpc<{ link: string }>("files/get_temporary_upload_link", {
++      commit_info: { path, mode: "add", autorename: false, mute: true, strict_conflict: false }, duration: 14400,
++    });
++    return r.link;
++  }
++
++  /** Metadata for a path, or null when it doesn't exist. */
++  async metadata(path: string): Promise<{ ".tag": string; path_display: string; size?: number } | null> {
++    try {
++      return await this.rpc("files/get_metadata", { path });
++    } catch (e) {
++      if (e instanceof DropboxError && e.status === 409 && /not_found/.test(String((e.body as { error_summary?: string })?.error_summary ?? ""))) return null;
++      throw e;
++    }
++  }
++
++  async exists(path: string) { return (await this.metadata(path)) !== null; }
++
++  async temporaryLink(path: string) {
++    const r = await this.rpc<{ link: string }>("files/get_temporary_link", { path });
++    return r.link;
++  }
++
++  async move(from: string, to: string) {
++    const r = await this.rpc<{ metadata: { path_display: string } }>("files/move_v2", { from_path: from, to_path: to, autorename: true, allow_ownership_transfer: false });
++    return r.metadata.path_display;
++  }
++}
++
++let client: DropboxClient | null | undefined;
++export function dropbox(): DropboxClient | null {
++  if (client !== undefined) return client;
++  const cfg = dropboxConfig();
++  client = cfg ? new DropboxClient(cfg) : null;
++  return client;
++}
+diff --git a/src/lib/handbook-sync.ts b/src/lib/handbook-sync.ts
+new file mode 100644
+index 0000000..1e65f70
+--- /dev/null
++++ b/src/lib/handbook-sync.ts
+@@ -0,0 +1,29 @@
++import type postgres from "postgres";
++import { HANDBOOK } from "../content/handbook";
++
++/** Articles whose built-in text changed with the footage/standards update (refreshed once per database). */
++export const REFRESHED_ARTICLES = ["video-cheat-sheet", "footage-standards", "how-to-upload", "file-formats"];
++const FLAG = "handbook_standards_v1";
++
++/**
++ * Brings an existing database's handbook up to date with src/content/handbook.ts without wiping it:
++ * adds missing categories and articles, keeps category order in step, and refreshes the few articles
++ * whose built-in text changed (once, guarded by an app flag). Runs on every build; safe to repeat.
++ */
++export async function syncHandbook(sql: postgres.Sql) {
++  const [{ fresh }] = await sql`insert into app_flags (key) values (${FLAG}) on conflict do nothing returning true as fresh`.then((r) => (r.length ? r : [{ fresh: false }]));
++  let added = 0;
++  for (const [ci, c] of HANDBOOK.entries()) {
++    const [cat] = await sql`insert into handbook_categories (slug, title, description, icon, sort) values (${c.slug}, ${c.title}, ${c.description}, ${c.icon}, ${ci})
++      on conflict (slug) do update set sort = excluded.sort returning id`;
++    for (const [ai, a] of c.articles.entries()) {
++      const [row] = await sql`insert into handbook_articles (category_id, slug, title, summary, body, audience, read_minutes, sort)
++        values (${cat.id}, ${a.slug}, ${a.title}, ${a.summary}, ${a.body}, ${a.audience ?? "all"}, ${a.minutes ?? 3}, ${ai})
++        on conflict (slug) do nothing returning id`;
++      if (row) added++;
++      else if (fresh && REFRESHED_ARTICLES.includes(a.slug))
++        await sql`update handbook_articles set title = ${a.title}, summary = ${a.summary}, body = ${a.body}, read_minutes = ${a.minutes ?? 3}, updated_at = now() where slug = ${a.slug}`;
++    }
++  }
++  return { added, refreshed: fresh ? REFRESHED_ARTICLES.length : 0 };
++}
+diff --git a/src/lib/services/contracts.ts b/src/lib/services/contracts.ts
+index 5fee55a..95261cf 100644
+--- a/src/lib/services/contracts.ts
++++ b/src/lib/services/contracts.ts
+@@ -1,7 +1,7 @@
+ import "server-only";
+ import { createHash } from "node:crypto";
+ import { sql } from "@/lib/db";
+-import { DEFAULT_CONTRACT } from "@/content/contract";
++import { DEFAULT_CONTRACT, LEGACY_CONTRACT_SHA, STANDARDS_ADDENDUM } from "@/content/contract";
+ import { weddingPlaces, placeLine } from "@/lib/venues";
+ 
+ type Db = typeof sql;
+@@ -9,11 +9,36 @@ export { COMPANY } from "@/lib/contract-fill";
+ 
+ export type Template = { id: string; version: number; title: string; body: string; change_note: string | null; created_at: Date; created_by_name: string | null };
+ 
++const UPGRADE_FLAG = "contract_standards_v2";
++let upgradeChecked = false;
++
++/**
++ * One-time upgrade that adds the shooting standard, backup, insurance and liability terms. If the live agreement
++ * is still the original built-in text it's replaced with the new default; if a coordinator edited it, the new
++ * terms are appended as an addendum so their wording is kept. Either way it's a new version, so earlier
++ * signatures stay exactly as signed and everyone signs the new terms on their next wedding.
++ */
++async function upgradeTemplate(db: Db, cur: Template) {
++  if (upgradeChecked) return null;
++  const claimed = await db`insert into app_flags (key) values (${UPGRADE_FLAG}) on conflict do nothing returning key`;
++  upgradeChecked = true;
++  if (!claimed.length) return null;
++  if (cur.body.includes("## Addendum — shooting standard") || cur.body.includes("## 10. Equipment, damage and liability")) return null;
++  const legacy = createHash("sha256").update(cur.body).digest("hex") === LEGACY_CONTRACT_SHA;
++  const body = legacy ? DEFAULT_CONTRACT.body : `${cur.body.trimEnd()}\n\n${STANDARDS_ADDENDUM}`;
++  const note = legacy ? "Added shooting standard, backups, insurance and liability terms" : "Added addendum: shooting standard, backups, insurance and liability";
++  await db`insert into contract_templates (version, title, body, change_note) values (${cur.version + 1}, ${cur.title}, ${body}, ${note}) on conflict (version) do nothing`;
++  const [t] = await db<Template[]>`select t.*, u.full_name as created_by_name from contract_templates t left join users u on u.id = t.created_by order by version desc limit 1`;
++  return t;
++}
++
+ /** Current contract version; creates version 1 from the built-in draft the first time. */
+ export async function activeTemplate(db: Db = sql): Promise<Template> {
+   const [t] = await db<Template[]>`select t.*, u.full_name as created_by_name from contract_templates t left join users u on u.id = t.created_by order by version desc limit 1`;
+-  if (t) return t;
++  if (t) return (await upgradeTemplate(db, t)) ?? t;
+   await db`insert into contract_templates (version, title, body, change_note) values (1, ${DEFAULT_CONTRACT.title}, ${DEFAULT_CONTRACT.body}, 'Initial version') on conflict (version) do nothing`;
++  await db`insert into app_flags (key) values (${UPGRADE_FLAG}) on conflict do nothing`;
++  upgradeChecked = true;
+   const [t1] = await db<Template[]>`select t.*, null as created_by_name from contract_templates t order by version desc limit 1`;
+   return t1;
+ }
+diff --git a/src/lib/services/staffing.ts b/src/lib/services/staffing.ts
+index 04fe7cf..d628e94 100644
+--- a/src/lib/services/staffing.ts
++++ b/src/lib/services/staffing.ts
+@@ -1,4 +1,5 @@
+ import "server-only";
++import { STANDARDS_VERSION } from "@/content/standards";
+ import { sql, num } from "@/lib/db";
+ import { notify } from "./notifications";
+ import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
+@@ -98,7 +99,7 @@ function docsOk(docs: { doc_type: string; status: string; expires_on: string | n
+ export type Candidate = {
+   id: string; name: string; avatar_url: string | null; city: string | null; rating: number; distance: Distance | null; mileage: number;
+   calendar: "available" | "unavailable" | "personal" | null; booked: string | null; docs_ok: boolean; late_cancels: number; upcoming: number; declined: boolean;
+-  blocked: string | null;
++  blocked: string | null; standards_ok: boolean;
+ };
+ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise<Candidate[]> {
+   const [a] = await db`select a.id, a.role, a.wedding_id, a.team_member_id, w.wedding_date::text as date, w.venue_lat, w.venue_lng, m.slug as market_slug
+@@ -114,7 +115,8 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
+       exists(select 1 from assignment_declines d where d.assignment_id = ${a.id} and d.team_member_id = t.id) as declined,
+       (select count(*) from assignment_cancellations x where x.team_member_id = t.id and x.late and x.status in ('reassigned','reopened'))::int as late_cancels,
+       (select count(*) from wedding_assignments x join weddings w2 on w2.id = x.wedding_id where x.team_member_id = t.id and x.status = 'accepted' and w2.wedding_date >= current_date)::int as upcoming,
+-      (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs
++      (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs,
++      exists(select 1 from standards_acknowledgments s where s.team_member_id = t.id and s.version = ${STANDARDS_VERSION}) as standards_ok
+     from team_members t join users u on u.id = t.user_id left join markets mk on mk.id = t.home_market_id
+     where t.discipline = ${discipline} and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
+   const venue = { lat: a.venue_lat, lng: a.venue_lng, market_slug: a.market_slug };
+@@ -123,7 +125,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
+     const blocked = r.on_wedding ? "Already on this wedding" : r.booked ? `Booked: ${r.booked}` : r.calendar && r.calendar !== "available" ? `Marked ${r.calendar}` : null;
+     return {
+       id: r.id, name: r.full_name, avatar_url: r.avatar_url, city: r.city, rating: num(r.rating), distance, mileage: mileagePay(distance?.miles),
+-      calendar: r.calendar, booked: r.booked, docs_ok: docsOk(r.docs), late_cancels: r.late_cancels, upcoming: r.upcoming, declined: r.declined, blocked,
++      calendar: r.calendar, booked: r.booked, docs_ok: docsOk(r.docs), late_cancels: r.late_cancels, upcoming: r.upcoming, declined: r.declined, blocked, standards_ok: r.standards_ok,
+     } as Candidate;
+   }).sort((x, y) => Number(!!x.blocked) - Number(!!y.blocked) || (x.distance?.miles ?? 1e9) - (y.distance?.miles ?? 1e9));
+ }
+diff --git a/src/lib/services/standards.ts b/src/lib/services/standards.ts
+new file mode 100644
+index 0000000..2a5ab09
+--- /dev/null
++++ b/src/lib/services/standards.ts
+@@ -0,0 +1,22 @@
++import "server-only";
++import { sql } from "@/lib/db";
++import { STANDARDS_VERSION } from "@/content/standards";
++import { normName } from "./contracts";
++
++type Db = typeof sql;
++
++export async function standardsAcceptance(memberId: string, db: Db = sql) {
++  const [r] = await db`select version, signer_name, signed_at from standards_acknowledgments where team_member_id = ${memberId} and version = ${STANDARDS_VERSION}`;
++  return r ? { version: r.version as number, signerName: r.signer_name as string, signedAt: r.signed_at as Date } : null;
++}
++
++export const STANDARDS_REQUIRED_MESSAGE = "Please read and accept the team standards (shooting, tagging, backups, insurance and liability) before taking weddings.";
++
++export async function acceptStandards(member: { id: string; full_name: string }, sig: { name: string; agree: boolean; ip: string | null; userAgent: string | null }) {
++  if (!sig.agree) return { ok: false as const, message: "Tick the box to confirm you'll follow the standards." };
++  if (normName(sig.name) !== normName(member.full_name)) return { ok: false as const, message: `Type your full name exactly as it appears on your profile (${member.full_name}).` };
++  await sql`insert into standards_acknowledgments (team_member_id, version, signer_name, ip, user_agent)
++    values (${member.id}, ${STANDARDS_VERSION}, ${sig.name.trim().replace(/\s+/g, " ")}, ${sig.ip}, ${sig.userAgent})
++    on conflict (team_member_id, version) do nothing`;
++  return { ok: true as const };
++}
+diff --git a/src/lib/services/team.ts b/src/lib/services/team.ts
+index 7503946..c15302f 100644
+--- a/src/lib/services/team.ts
++++ b/src/lib/services/team.ts
+@@ -3,6 +3,7 @@ import { sql, num } from "@/lib/db";
+ import { notify } from "./notifications";
+ import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
+ import { activeTemplate, contractContext, recordSignature, voidContracts, normName, fillTemplate } from "./contracts";
++import { standardsAcceptance, STANDARDS_REQUIRED_MESSAGE } from "./standards";
+ 
+ export type Member = {
+   id: string; user_id: string; discipline: "photo" | "video"; bio: string | null; home_market_id: string | null;
+@@ -151,6 +152,7 @@ export type Signature = { name: string; agree: boolean; version: number; ip: str
+  */
+ export async function acceptOpportunity(member: Member, assignmentId: string, sig: Signature) {
+   if (member.status !== "active") return { ok: false as const, message: "Your account needs to be approved before you can take weddings." };
++  if (!(await standardsAcceptance(member.id))) return { ok: false as const, message: STANDARDS_REQUIRED_MESSAGE, needsStandards: true };
+   if (!sig.agree) return { ok: false as const, message: "Please confirm you agree to the terms." };
+   if (normName(sig.name) !== normName(member.full_name)) return { ok: false as const, message: `Type your full name exactly as it appears on your profile (${member.full_name}).`, field: "name" };
+   return sql.begin(async (tx) => {
+@@ -414,6 +416,8 @@ export async function submitLicense(member: Member, input: { docType: string; la
+ const fmtShort = (d: string) => new Date(d + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+ export async function actionItems(member: Member) {
+   const items: { id: string; title: string; detail: string; href: string; tone: "danger" | "warning" | "info" | "blush"; cta: string; assignmentId?: string }[] = [];
++  if (!(await standardsAcceptance(member.id)))
++    items.push({ id: "standards", title: "Accept the team standards", detail: "Shooting standard, footage tagging, backups, insurance and liability — required before you can take weddings.", href: "/team/standards", tone: "danger", cta: "Review" });
+   const lic = await licenses(member.id);
+   for (const d of REQUIRED_DOCS.filter((x) => x.required)) {
+     const docs = lic.filter((l) => l.doc_type === d.type);
+diff --git a/src/lib/services/uploads.ts b/src/lib/services/uploads.ts
+index b513fa0..ac303d8 100644
+--- a/src/lib/services/uploads.ts
++++ b/src/lib/services/uploads.ts
+@@ -1,12 +1,15 @@
+ import "server-only";
+ import { sql } from "@/lib/db";
+ import { storage, storageKey } from "@/lib/storage";
++import { safeName, dropboxConfig } from "@/lib/dropbox";
+ import { notify } from "./notifications";
++import { momentLabel, isMoment, isSource, isAudioSource, SOURCE_LABEL, BEAT_LABEL, MARKER_BEATS, MOMENTS } from "@/content/footage";
+ 
+ export async function uploadableWeddings(memberId: string) {
+   return sql`select w.id, w.couple, w.wedding_date::text, a.id as assignment_id, a.role, m.city, m.state,
+       (select count(*) from uploads u where u.assignment_id = a.id and u.status in ('uploaded','ready','processing'))::int as done,
+       (select count(*) from uploads u where u.assignment_id = a.id and u.status = 'failed')::int as failed,
++      (select count(*) from uploads u where u.assignment_id = a.id and u.status <> 'failed' and u.moment is null and u.kind = 'video')::int as untagged,
+       (select coalesce(sum(size_bytes),0) from uploads u where u.assignment_id = a.id and u.status <> 'failed')::bigint as bytes
+     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
+     where a.team_member_id = ${memberId} and a.status in ('accepted','completed') and w.wedding_date between current_date - 45 and current_date + 7 and w.status <> 'cancelled'
+@@ -16,38 +19,116 @@ export async function uploadableWeddings(memberId: string) {
+ export async function listUploads(userId: string, kind: "photo" | "video", weddingId?: string) {
+   // Video "processing" finishes ~2 minutes after upload in the demo pipeline.
+   await sql`update uploads set status = 'ready' where uploader_id = ${userId} and status = 'processing' and created_at < now() - interval '2 minutes'`;
+-  return sql`select u.id, u.wedding_id, u.category, u.filename, u.size_bytes, u.status, u.error, u.duration_seconds, u.created_at, w.couple
++  return sql`select u.id, u.wedding_id, u.category, u.moment, u.source, u.camera_markers, u.filename, u.size_bytes, u.status, u.error, u.duration_seconds, u.created_at, w.couple,
++      coalesce((select json_agg(json_build_object('id', k.id, 'at', k.at_seconds, 'beat', k.beat, 'note', k.note) order by k.at_seconds) from upload_markers k where k.upload_id = u.id), '[]') as markers
+     from uploads u left join weddings w on w.id = u.wedding_id
+     where u.uploader_id = ${userId} and u.kind = ${kind} ${weddingId ? sql`and u.wedding_id = ${weddingId}` : sql``}
+-    order by u.created_at desc limit 300`;
++    order by u.created_at desc limit 500`;
+ }
+ 
+-export async function beginUpload(userId: string, input: { weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; filename: string; size: number; mime: string; retryOf?: string | null }) {
++export type BeginInput = {
++  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string;
++  filename: string; size: number; mime: string; retryOf?: string | null;
++  moment?: string | null; source?: string | null; cameraMarkers?: boolean;
++};
++
++const PHOTO_CATEGORY: Record<string, string> = { raw: "RAW", edited: "Edited", highlights: "Highlights" };
++
++/**
++ * Readable folder layout used when files live in Dropbox, e.g.
++ *   /Weddings/2026-10-10 Ade & Tolu [3f2a9c1b]/Video/Toasts & speeches/Daniel Kim · B-cam/C0042.MP4
++ *   /Weddings/2026-10-10 Ade & Tolu [3f2a9c1b]/Photo/RAW/Whole day - mixed/Marcus Johnson · Main body/A_0001.CR3
++ */
++export function readablePath(root: string, p: {
++  kind: "photo" | "video" | "document"; category: string; filename: string; uploader: string;
++  wedding: { id: string; date: string; couple: string } | null; moment: string | null; source: string | null;
++}) {
++  const file = safeName(p.filename, 140);
++  const who = safeName(p.uploader, 60);
++  if (p.kind === "document" || !p.wedding) return [root, "_Team documents", safeName(p.category || "files"), who, file].join("/");
++  const wedding = `${p.wedding.date} ${safeName(p.wedding.couple, 70)} [${p.wedding.id.slice(0, 8)}]`;
++  const moment = safeName(p.moment ? momentLabel(p.moment) : "Untagged");
++  const shooter = p.source ? `${who} · ${safeName(SOURCE_LABEL[p.source] ?? p.source, 40)}` : who;
++  const parts = p.kind === "photo"
++    ? [root, wedding, "Photo", PHOTO_CATEGORY[p.category] ?? safeName(p.category), moment, shooter, file]
++    : [root, wedding, "Video", moment, shooter, file];
++  return parts.join("/");
++}
++
++/** Adds " (2)", " (3)"… before the extension until the path is free in the database and in storage. */
++async function freePath(path: string, ignoreId: string | null) {
++  const dot = path.lastIndexOf(".");
++  const slash = path.lastIndexOf("/");
++  const [stem, ext] = dot > slash ? [path.slice(0, dot), path.slice(dot)] : [path, ""];
++  for (let n = 1; n <= 60; n++) {
++    const candidate = n === 1 ? path : `${stem} (${n})${ext}`;
++    const [taken] = await sql`select 1 from uploads where lower(storage_key) = lower(${candidate}) and status <> 'failed' ${ignoreId ? sql`and id <> ${ignoreId}` : sql``} limit 1`;
++    if (taken) continue;
++    if (await storage().exists(candidate)) continue;
++    return candidate;
++  }
++  throw new Error("Too many files with this name — rename the file and try again.");
++}
++
++async function keyFor(userId: string, input: Pick<BeginInput, "kind" | "category" | "filename" | "weddingId" | "moment" | "source">, ignoreId: string | null) {
++  const provider = storage();
++  if (!provider.readablePaths) return storageKey(`${input.kind}/${input.weddingId ?? "misc"}`, input.filename);
++  const [[w], [u]] = await Promise.all([
++    input.weddingId ? sql`select id, couple, wedding_date::text as date from weddings where id = ${input.weddingId}` : Promise.resolve([] as never[]),
++    sql`select full_name from users where id = ${userId}`,
++  ]);
++  const root = dropboxConfig()?.root ?? "";
++  return freePath(readablePath(root, { kind: input.kind, category: input.category, filename: input.filename, uploader: u?.full_name ?? "Team member", wedding: w ? { id: w.id, date: w.date, couple: w.couple } : null, moment: input.moment ?? null, source: input.source ?? null }), ignoreId);
++}
++
++function normalizeTags(input: Pick<BeginInput, "kind" | "category" | "moment" | "source">) {
++  if (input.kind === "document") return { category: input.category, moment: null, source: null };
++  const moment = input.moment && isMoment(input.moment, input.kind === "photo") ? input.moment : null;
++  const source = input.source && isSource(input.kind, input.source) ? input.source : null;
++  if (input.kind === "video" && !moment) throw new Error("Choose which part of the day this footage covers.");
++  // Video files are filed as footage or audio from their source; photos keep RAW / Edited / Highlights.
++  const category = input.kind === "video" ? (isAudioSource(source) ? "audio" : "footage") : input.category;
++  return { category, moment, source };
++}
++
++export async function beginUpload(userId: string, input: BeginInput) {
+   if (input.assignmentId) {
+     const [ok] = await sql`select 1 from wedding_assignments a join team_members t on t.id = a.team_member_id where a.id = ${input.assignmentId} and t.user_id = ${userId}`;
+     if (!ok) throw new Error("You're not assigned to this wedding.");
+   }
+-  const key = storageKey(`${input.kind}/${input.weddingId ?? "misc"}`, input.filename);
+-  const target = await storage().createUploadTarget(key, input.mime);
++  const tags = normalizeTags(input);
++  const provider = storage();
++  const key = await keyFor(userId, { ...input, ...tags }, input.retryOf ?? null);
++  const target = await provider.createUploadTarget(key, input.mime, input.size);
+   let id: string;
+   if (input.retryOf) {
+-    const [r] = await sql`update uploads set status = 'uploading', error = null, storage_key = ${key}, created_at = now() where id = ${input.retryOf} and uploader_id = ${userId} returning id`;
++    const [r] = await sql`update uploads set status = 'uploading', error = null, storage_key = ${key}, storage_provider = ${provider.name}, verified_at = null, created_at = now(),
++        category = ${tags.category}, moment = coalesce(${tags.moment}, moment), source = coalesce(${tags.source}, source)
++      where id = ${input.retryOf} and uploader_id = ${userId} returning id`;
+     if (!r) throw new Error("Upload not found");
+     id = r.id;
+   } else {
+-    const [r] = await sql`insert into uploads (wedding_id, assignment_id, uploader_id, kind, category, filename, size_bytes, mime, storage_key, status)
+-      values (${input.weddingId}, ${input.assignmentId}, ${userId}, ${input.kind}, ${input.category}, ${input.filename}, ${input.size}, ${input.mime || null}, ${key}, 'uploading') returning id`;
++    const [r] = await sql`insert into uploads (wedding_id, assignment_id, uploader_id, kind, category, moment, source, camera_markers, filename, size_bytes, mime, storage_key, storage_provider, status)
++      values (${input.weddingId}, ${input.assignmentId}, ${userId}, ${input.kind}, ${tags.category}, ${tags.moment}, ${tags.source}, ${!!input.cameraMarkers}, ${input.filename}, ${input.size}, ${input.mime || null}, ${key}, ${provider.name}, 'uploading') returning id`;
+     id = r.id;
+   }
+-  return { id, key, target, provider: storage().name };
++  return { id, key, target, provider: provider.name };
+ }
+ 
+ export async function finishUpload(userId: string, id: string, result: { ok: boolean; error?: string; durationSeconds?: number | null }) {
+-  const [u] = await sql`select kind, wedding_id from uploads where id = ${id} and uploader_id = ${userId}`;
++  const [u] = await sql`select kind, wedding_id, storage_key, size_bytes, storage_provider from uploads where id = ${id} and uploader_id = ${userId}`;
+   if (!u) throw new Error("Upload not found");
+-  const status = !result.ok ? "failed" : u.kind === "video" ? "processing" : "uploaded";
+-  await sql`update uploads set status = ${status}, error = ${result.ok ? null : result.error ?? "Upload failed"}, duration_seconds = coalesce(${result.durationSeconds ?? null}, duration_seconds) where id = ${id}`;
+-  return status;
++  let ok = result.ok;
++  let error = result.error ?? null;
++  // Trust but verify: the browser says it finished, so check the file is really there at full size.
++  if (ok && u.storage_key && u.storage_provider === storage().name) {
++    const v = await storage().verify(u.storage_key, Number(u.size_bytes)).catch((e) => ({ ok: false, error: e instanceof Error ? e.message : "Couldn't confirm the upload" }));
++    if (!v.ok) { ok = false; error = v.error ?? "Couldn't confirm the upload"; }
++  }
++  const status = !ok ? "failed" : u.kind === "video" ? "processing" : "uploaded";
++  await sql`update uploads set status = ${status}, error = ${ok ? null : error ?? "Upload failed"}, verified_at = ${ok ? new Date() : null},
++      duration_seconds = coalesce(${result.durationSeconds ?? null}, duration_seconds) where id = ${id}`;
++  return { status, error: ok ? null : error };
+ }
+ 
+ export async function batchSummary(userId: string, weddingId: string | null, okCount: number, failCount: number, kind: string) {
+@@ -60,3 +141,82 @@ export async function batchSummary(userId: string, weddingId: string | null, okC
+ export async function deleteUpload(userId: string, id: string) {
+   await sql`delete from uploads where id = ${id} and uploader_id = ${userId} and status in ('failed','uploading')`;
+ }
++
++/* ───────────── Tags & markers ───────────── */
++
++/** The uploader, or a coordinator/admin, may edit tags and markers. */
++async function editableUpload(user: { id: string; role: string }, id: string) {
++  const [u] = await sql`select id, uploader_id, kind, category, moment, source, filename, wedding_id, storage_key, storage_provider, status, duration_seconds from uploads where id = ${id}`;
++  if (!u) return null;
++  const staff = user.role === "coordinator" || user.role === "admin";
++  return staff || u.uploader_id === user.id ? u : null;
++}
++
++export async function retagUpload(user: { id: string; role: string }, id: string, input: { moment?: string | null; source?: string | null }) {
++  const u = await editableUpload(user, id);
++  if (!u) return { ok: false as const, message: "Upload not found." };
++  if (u.kind === "document") return { ok: false as const, message: "Documents aren't tagged." };
++  let tags;
++  try {
++    tags = normalizeTags({ kind: u.kind, category: u.category, moment: input.moment === undefined ? u.moment : input.moment, source: input.source === undefined ? u.source : input.source });
++  } catch (e) { return { ok: false as const, message: e instanceof Error ? e.message : "Invalid tag" }; }
++  let key = u.storage_key as string | null;
++  const provider = storage();
++  // Keep the Dropbox folder in step with the tag so editors browsing Dropbox see the same thing.
++  if (key && provider.readablePaths && u.storage_provider === provider.name && ["uploaded", "processing", "ready"].includes(u.status)) {
++    const next = await keyFor(u.uploader_id, { kind: u.kind, category: tags.category, filename: u.filename, weddingId: u.wedding_id, moment: tags.moment, source: tags.source }, u.id);
++    if (next.toLowerCase() !== key.toLowerCase()) {
++      try { key = await provider.move(key, next); } catch { return { ok: false as const, message: "Couldn't move the file in Dropbox — try again in a minute." }; }
++    }
++  }
++  await sql`update uploads set moment = ${tags.moment}, source = ${tags.source}, category = ${tags.category}, storage_key = ${key} where id = ${id}`;
++  return { ok: true as const, message: `Tagged as ${momentLabel(tags.moment)}` };
++}
++
++export async function addMarker(user: { id: string; role: string }, uploadId: string, input: { at: number; beat: string; note?: string | null }) {
++  const u = await editableUpload(user, uploadId);
++  if (!u) return { ok: false as const, message: "Upload not found." };
++  if (u.kind !== "video") return { ok: false as const, message: "Markers are for video and audio files." };
++  if (!Number.isInteger(input.at) || input.at < 0) return { ok: false as const, message: "Enter a time like 12:31 or 1:02:45." };
++  if (u.duration_seconds && input.at > u.duration_seconds) return { ok: false as const, message: `This clip is only ${Math.floor(u.duration_seconds / 60)}m ${u.duration_seconds % 60}s long.` };
++  if (![...MARKER_BEATS, ...MOMENTS].some((b) => b.value === input.beat)) return { ok: false as const, message: "Choose what happens at this point." };
++  const [{ n }] = await sql`select count(*)::int as n from upload_markers where upload_id = ${uploadId}`;
++  if (n >= 100) return { ok: false as const, message: "That's the maximum number of markers for one file." };
++  const [m] = await sql`insert into upload_markers (upload_id, at_seconds, beat, note, created_by) values (${uploadId}, ${input.at}, ${input.beat}, ${input.note?.trim().slice(0, 200) || null}, ${user.id}) returning id`;
++  return { ok: true as const, message: `Marker added: ${BEAT_LABEL[input.beat]}`, id: m.id as string };
++}
++
++export async function deleteMarker(user: { id: string; role: string }, markerId: string) {
++  const [m] = await sql`select upload_id from upload_markers where id = ${markerId}`;
++  if (!m || !(await editableUpload(user, m.upload_id))) return { ok: false as const, message: "Marker not found." };
++  await sql`delete from upload_markers where id = ${markerId}`;
++  return { ok: true as const, message: "Marker removed" };
++}
++
++/* ───────────── Coordinator view ───────────── */
++
++export type FootageRow = {
++  id: string; kind: "photo" | "video"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
++  size_bytes: number; status: string; duration_seconds: number | null; created_at: Date; uploader: string; storage_provider: string | null;
++  markers: { id: string; at: number; beat: string; note: string | null }[];
++};
++
++/** Every photo/video file for a wedding, with its tags and markers, for the coordinator's footage panel. */
++export async function footageForWedding(weddingId: string) {
++  return sql<FootageRow[]>`select u.id, u.kind, u.category, u.moment, u.source, u.camera_markers, u.filename, u.size_bytes::float8 as size_bytes, u.status, u.duration_seconds, u.created_at,
++      us.full_name as uploader, u.storage_provider,
++      coalesce((select json_agg(json_build_object('id', k.id, 'at', k.at_seconds, 'beat', k.beat, 'note', k.note) order by k.at_seconds) from upload_markers k where k.upload_id = u.id), '[]') as markers
++    from uploads u join users us on us.id = u.uploader_id
++    where u.wedding_id = ${weddingId} and u.kind in ('photo','video') and u.status <> 'failed'
++    order by u.created_at`;
++}
++
++/** Signed download link for staff or the person who uploaded it. */
++export async function downloadUrl(user: { id: string; role: string }, id: string) {
++  const [u] = await sql`select uploader_id, storage_key, storage_provider, status from uploads where id = ${id}`;
++  if (!u || !u.storage_key) return null;
++  const staff = user.role === "coordinator" || user.role === "admin";
++  if (!staff && u.uploader_id !== user.id) return null;
++  if (u.storage_provider !== storage().name) return null;
++  return storage().getDownloadUrl(u.storage_key, 3600);
++}
+diff --git a/src/lib/storage.ts b/src/lib/storage.ts
+index fa4c742..e75f0a1 100644
+--- a/src/lib/storage.ts
++++ b/src/lib/storage.ts
+@@ -1,36 +1,88 @@
+ import "server-only";
+ 
++import { dropbox, type DropboxClient } from "./dropbox";
++
+ /**
+- * Storage abstraction. Files go straight from the browser to the provider using a short-lived
+- * signed upload URL, so large videos never pass through the app server.
++ * Storage abstraction. Files go straight from the browser to the provider, so large videos never
++ * pass through the app server. The app stays the interface; the provider only holds the files.
+  *
++ *  - DropboxStorage:  used when DROPBOX_APP_KEY + DROPBOX_APP_SECRET + DROPBOX_REFRESH_TOKEN are set.
++ *                     Files land in the company Dropbox in a readable folder per wedding.
+  *  - SupabaseStorage: used when SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY are set.
+  *  - MockStorage:     simulates uploads (progress, failures, retries) for demos and local dev.
+- *
+- * Add S3 / Cloudflare R2 by implementing StorageProvider with presigned PUT URLs.
+  */
+ export type UploadTarget =
+   | { mode: "put"; url: string; headers: Record<string, string> }
++  /** Dropbox temporary upload link (files ≤ 140 MB): one POST, no token in the browser. */
++  | { mode: "post"; url: string; headers: Record<string, string> }
++  /** Dropbox chunked upload session for big files, with a short-lived write-only token. */
++  | { mode: "dropbox-session"; token: string; path: string; chunkSize: number; expiresAt: number }
+   | { mode: "simulate" };
+ 
+ export interface StorageProvider {
+   name: string;
+-  createUploadTarget(key: string, contentType: string): Promise<UploadTarget>;
++  /** Human label for the upload screen. */
++  label: string;
++  /** True when keys should be readable folder paths (Dropbox) rather than opaque ids. */
++  readablePaths: boolean;
++  createUploadTarget(key: string, contentType: string, size?: number): Promise<UploadTarget>;
+   getDownloadUrl(key: string, expiresIn?: number): Promise<string | null>;
++  /** Confirms the file really arrived (and is the right size). Providers without a cheap check return ok. */
++  verify(key: string, size: number): Promise<{ ok: boolean; error?: string }>;
++  exists(key: string): Promise<boolean>;
++  /** Moves a file (e.g. after re-tagging); returns the new key. */
++  move(from: string, to: string): Promise<string>;
++}
++
++/** Dropbox's single-request upload limit is 150 MB; stay safely under it. */
++export const DROPBOX_SIMPLE_LIMIT = 140 * 1024 * 1024;
++export const DROPBOX_CHUNK = 32 * 1024 * 1024;
++
++class DropboxStorage implements StorageProvider {
++  name = "dropbox";
++  label = "Visual Weddings Dropbox";
++  readablePaths = true;
++  constructor(private db: DropboxClient) {}
++  async createUploadTarget(key: string, contentType: string, size = 0): Promise<UploadTarget> {
++    if (size <= DROPBOX_SIMPLE_LIMIT) {
++      const url = await this.db.temporaryUploadLink(key);
++      return { mode: "post", url, headers: { "Content-Type": "application/octet-stream" } };
++    }
++    const { token, expiresAt } = await this.db.accessToken("files.content.write");
++    return { mode: "dropbox-session", token, path: key, chunkSize: DROPBOX_CHUNK, expiresAt };
++  }
++  async getDownloadUrl(key: string) {
++    try { return await this.db.temporaryLink(key); } catch { return null; }
++  }
++  async verify(key: string, size: number) {
++    const m = await this.db.metadata(key);
++    if (!m || m[".tag"] !== "file") return { ok: false, error: "The file didn't reach Dropbox — please retry." };
++    if (typeof m.size === "number" && m.size !== size) return { ok: false, error: `Dropbox has ${m.size} bytes but the file is ${size} bytes — please retry.` };
++    return { ok: true };
++  }
++  exists(key: string) { return this.db.exists(key); }
++  move(from: string, to: string) { return this.db.move(from, to); }
+ }
+ 
+ class MockStorage implements StorageProvider {
+   name = "mock";
++  label = "Demo storage — transfers are simulated";
++  readablePaths = false;
+   async createUploadTarget(): Promise<UploadTarget> {
+     return { mode: "simulate" };
+   }
+   async getDownloadUrl() {
+     return null;
+   }
++  async verify() { return { ok: true }; }
++  async exists() { return false; }
++  async move(_from: string, to: string) { return to; }
+ }
+ 
+ class SupabaseStorage implements StorageProvider {
+   name = "supabase";
++  label = "Supabase Storage (private bucket)";
++  readablePaths = false;
+   constructor(private url: string, private key: string, private bucket: string) {}
+   private headers() {
+     return { Authorization: `Bearer ${this.key}`, apikey: this.key, "Content-Type": "application/json" };
+@@ -54,13 +106,18 @@ class SupabaseStorage implements StorageProvider {
+     const { signedURL } = (await res.json()) as { signedURL: string };
+     return `${this.url}/storage/v1${signedURL}`;
+   }
++  async verify() { return { ok: true }; }
++  async exists() { return false; }
++  async move(from: string) { return from; }
+ }
+ 
+ let provider: StorageProvider | null = null;
+ export function storage(): StorageProvider {
+   if (provider) return provider;
+   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET } = process.env;
+-  provider = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
++  const dbx = dropbox();
++  provider = dbx ? new DropboxStorage(dbx)
++    : SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+     ? new SupabaseStorage(SUPABASE_URL.replace(/\/$/, ""), SUPABASE_SERVICE_ROLE_KEY, SUPABASE_STORAGE_BUCKET || "visual-weddings")
+     : new MockStorage();
+   return provider;

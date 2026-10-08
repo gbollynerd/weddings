@@ -1,4 +1,5 @@
 import "server-only";
+import { STANDARDS_VERSION } from "@/content/standards";
 import { sql, num } from "@/lib/db";
 import { notify } from "./notifications";
 import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
@@ -98,7 +99,7 @@ function docsOk(docs: { doc_type: string; status: string; expires_on: string | n
 export type Candidate = {
   id: string; name: string; avatar_url: string | null; city: string | null; rating: number; distance: Distance | null; mileage: number;
   calendar: "available" | "unavailable" | "personal" | null; booked: string | null; docs_ok: boolean; late_cancels: number; upcoming: number; declined: boolean;
-  blocked: string | null;
+  blocked: string | null; standards_ok: boolean;
 };
 export async function candidatesFor(assignmentId: string, db: Db = sql): Promise<Candidate[]> {
   const [a] = await db`select a.id, a.role, a.wedding_id, a.team_member_id, w.wedding_date::text as date, w.venue_lat, w.venue_lng, m.slug as market_slug
@@ -114,7 +115,8 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
       exists(select 1 from assignment_declines d where d.assignment_id = ${a.id} and d.team_member_id = t.id) as declined,
       (select count(*) from assignment_cancellations x where x.team_member_id = t.id and x.late and x.status in ('reassigned','reopened'))::int as late_cancels,
       (select count(*) from wedding_assignments x join weddings w2 on w2.id = x.wedding_id where x.team_member_id = t.id and x.status = 'accepted' and w2.wedding_date >= current_date)::int as upcoming,
-      (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs
+      (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs,
+      exists(select 1 from standards_acknowledgments s where s.team_member_id = t.id and s.version = ${STANDARDS_VERSION}) as standards_ok
     from team_members t join users u on u.id = t.user_id left join markets mk on mk.id = t.home_market_id
     where t.discipline = ${discipline} and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
   const venue = { lat: a.venue_lat, lng: a.venue_lng, market_slug: a.market_slug };
@@ -123,7 +125,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
     const blocked = r.on_wedding ? "Already on this wedding" : r.booked ? `Booked: ${r.booked}` : r.calendar && r.calendar !== "available" ? `Marked ${r.calendar}` : null;
     return {
       id: r.id, name: r.full_name, avatar_url: r.avatar_url, city: r.city, rating: num(r.rating), distance, mileage: mileagePay(distance?.miles),
-      calendar: r.calendar, booked: r.booked, docs_ok: docsOk(r.docs), late_cancels: r.late_cancels, upcoming: r.upcoming, declined: r.declined, blocked,
+      calendar: r.calendar, booked: r.booked, docs_ok: docsOk(r.docs), late_cancels: r.late_cancels, upcoming: r.upcoming, declined: r.declined, blocked, standards_ok: r.standards_ok,
     } as Candidate;
   }).sort((x, y) => Number(!!x.blocked) - Number(!!y.blocked) || (x.distance?.miles ?? 1e9) - (y.distance?.miles ?? 1e9));
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { execSync } from "node:child_process";
 import postgres from "postgres";
 import { loadEnv } from "./env";
+import { syncHandbook } from "../src/lib/handbook-sync";
 
 loadEnv();
 async function main() {
@@ -21,6 +22,10 @@ async function main() {
       await sql.unsafe(readFileSync(join(process.cwd(), "db/schema.sql"), "utf8"));
     }
     const [{ n }] = await sql`select count(*)::int as n from users`;
+    if (n > 0) {
+      const h = await syncHandbook(sql);
+      if (h.added || h.refreshed) console.log(`◆ Handbook: ${h.added} new article(s), ${h.refreshed} refreshed`);
+    }
     await sql.end();
     if (n === 0 || process.env.RESEED === "1") {
       console.log("◆ Seeding demo data…");

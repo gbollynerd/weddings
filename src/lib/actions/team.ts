@@ -9,6 +9,7 @@ import * as up from "@/lib/services/uploads";
 import { markRead, markUnread } from "@/lib/services/notifications";
 import { sendMessage, startConversation, addParticipants, removeParticipant, messageClient, joinClientThread } from "@/lib/services/messages";
 import { geocodeMemberHome } from "@/lib/services/geo";
+import { acceptStandards } from "@/lib/services/standards";
 import type { ActionResult } from "./types";
 
 async function me() {
@@ -32,11 +33,12 @@ export async function contractPreviewAction(assignmentId: string): Promise<Actio
   return c ? { ok: true, data: c } : { ok: false, message: "This wedding is no longer available." };
 }
 
-export async function acceptOpportunityAction(assignmentId: string, sig: SignInput): Promise<ActionResult<{ status: string; weddingId: string; stale?: boolean }>> {
+export async function acceptOpportunityAction(assignmentId: string, sig: SignInput): Promise<ActionResult<{ status: string; weddingId: string; stale?: boolean; needsStandards?: boolean }>> {
   const { member } = await me();
   const r = await team.acceptOpportunity(member, assignmentId, { ...sig, ...(await signatureMeta()) });
   revalidatePath("/team", "layout"); revalidatePath("/admin", "layout");
-  if (!r.ok) return { ok: false, message: r.message, fieldErrors: "field" in r && r.field ? { name: r.message } : undefined, data: "stale" in r ? { status: "", weddingId: "", stale: true } : undefined };
+  if (!r.ok) return { ok: false, message: r.message, fieldErrors: "field" in r && r.field ? { name: r.message } : undefined,
+    data: "stale" in r ? { status: "", weddingId: "", stale: true } : "needsStandards" in r ? { status: "", weddingId: "", needsStandards: true } : undefined };
   return { ok: true, message: r.status === "pending" ? "Signed — awaiting coordinator approval" : `You're confirmed for ${r.couple}!`, data: { status: r.status, weddingId: r.weddingId } };
 }
 export async function signExistingAction(assignmentId: string, sig: SignInput): Promise<ActionResult> {
@@ -139,18 +141,32 @@ export async function submitLicenseAction(input: { docType: string; label?: stri
   return { ok: true, message: "Submitted for review" };
 }
 
+/* Team standards */
+export async function acceptStandardsAction(input: { name: string; agree: boolean }): Promise<ActionResult> {
+  const user = await requireUser(["photographer", "videographer"]);
+  const member = await team.getMember(user.id);
+  if (!member) return { ok: false, message: "Team profile not found." };
+  const r = await acceptStandards(member, { ...input, ...(await signatureMeta()) });
+  revalidatePath("/team", "layout");
+  return r.ok ? { ok: true, message: "Thanks — you've accepted the team standards" } : { ok: false, message: r.message };
+}
+
 /* Uploads */
-export async function beginUploadAction(input: { weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; filename: string; size: number; mime: string; retryOf?: string | null }) {
+export async function beginUploadAction(input: up.BeginInput) {
   const user = await requireUser();
   if (input.kind === "photo" && input.size > 200 * 1024 * 1024) return { ok: false as const, message: `${input.filename} is larger than 200 MB.` };
   if (input.kind === "video" && input.size > 100 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 100 GB.` };
-  const r = await up.beginUpload(user.id, input);
-  return { ok: true as const, ...r };
+  try {
+    const r = await up.beginUpload(user.id, input);
+    return { ok: true as const, ...r };
+  } catch (e) {
+    return { ok: false as const, message: e instanceof Error ? e.message : "Couldn't start the upload." };
+  }
 }
 export async function finishUploadAction(id: string, result: { ok: boolean; error?: string; durationSeconds?: number | null }) {
   const user = await requireUser();
-  const status = await up.finishUpload(user.id, id, result);
-  return { ok: true, status };
+  const r = await up.finishUpload(user.id, id, result);
+  return { ok: r.status !== "failed", status: r.status, error: r.error };
 }
 export async function uploadBatchDoneAction(weddingId: string | null, okCount: number, failCount: number, kind: string) {
   const user = await requireUser();

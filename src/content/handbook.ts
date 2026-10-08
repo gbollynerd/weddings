@@ -125,6 +125,132 @@ If anything goes wrong, stay calm, solve what you can, and message your coordina
     ],
   },
   {
+    slug: "required-standards",
+    title: "Required Standards & Agreements",
+    description: "The shooting standard, footage tagging, backups and your legal responsibilities. You accept these before taking weddings.",
+    icon: "ShieldCheck",
+    articles: [
+      {
+        slug: "shooting-standard",
+        title: "The shooting standard (every camera, every wedding)",
+        summary: "Same frame rate, same picture profile, synced timecode and dedicated audio — so footage from every shooter cuts together.",
+        minutes: 5,
+        body: `Our films are assembled from several shooters' cameras, and more and more of the first assembly is automated. That only works if every file follows the same standard. **This is required, not a suggestion** — footage that doesn't follow it costs hours in the edit and may delay your payment.
+
+## Video — every camera body
+| Setting | Standard |
+|---|---|
+| Resolution | 4K UHD (3840 × 2160) |
+| Frame rate | **23.976 fps** for everything at normal speed |
+| Slow motion | **59.94 fps** (conformed to 23.976 in the edit) — only for movement: entrances, dances, send-off |
+| Shutter | 1/50 at 23.976; 1/125 at 59.94. Use ND outdoors instead of raising the shutter |
+| Picture profile | Our house log profile for your brand (below). Never bake in a LUT or a creative look |
+| White balance | **Manual Kelvin**, set per location — never auto. Match the other shooters when you share a room |
+| Codec | Highest 10-bit 4:2:2 option your camera has (e.g. XAVC S-I, All-I, ProRes 422) |
+
+**House log profiles:** Sony S-Log3 / S-Gamut3.Cine · Canon C-Log3 / Cinema Gamut · Panasonic V-Log · Fujifilm F-Log2 · Nikon N-Log · Blackmagic Film Gen 5. Exposure: expose to the right (+1 to +1.7 stops on log), protect skin highlights.
+
+## Timecode — all cameras and recorders
+- Run **time-of-day timecode** on every camera and audio recorder.
+- If you have sync boxes (Tentacle, Deity, etc.), jam-sync them at call time and again after lunch.
+- No sync box? Set every camera and recorder clock to network time (time.gov) at call time, **and** record a visible slate clap in front of all running cameras and recorders at the start of the ceremony and the speeches.
+- Photographers: follow the [time-sync procedure](/team/handbook/time-sync) — the same clock is used to line photos up with the film.
+
+## Audio — dedicated, never camera-only
+1. **Lav on the partner waiting at the altar** (usually the groom) — recording locally, 32-bit float if your recorder supports it.
+2. **Lav on the officiant.**
+3. **Recorder on the DJ / soundboard feed** (or on the lectern) for speeches and the first dance.
+4. On-camera scratch audio **always on** — it's how the edit syncs everything.
+5. 48 kHz, 24-bit (or 32-bit float). Monitor with headphones during vows and speeches.
+
+## Photography
+- RAW only, **dual card slots recording to both cards** (backup/mirror mode, not overflow).
+- Camera clocks synced at call time (see time-sync).
+- Don't cull or delete in camera.
+
+## Before you leave the venue
+Check that every card has recorded to both slots, and that audio files exist for the ceremony and the speeches. If anything failed, tell your coordinator that night.`,
+      },
+      {
+        slug: "tagging-footage",
+        title: "Tagging your footage and adding markers",
+        summary: "Tag every upload with the moment and the camera it came from, and mark key beats inside long clips.",
+        minutes: 3,
+        body: `Editors (and our editing pipeline) find footage by **moment** and **camera**, not by file name. Tagging takes seconds when you upload and saves the editor hours.
+
+## When you upload
+1. Open **Uploads** and pick the wedding.
+2. In **Tag this batch**, choose the **moment** (Getting ready, Ceremony, Toasts & speeches, First dance…) and the **camera or recorder** (A-cam, B-cam, Drone, Audio · lav on officiant…).
+3. Add the files for that moment and camera. Then change the tags and add the next batch.
+4. Video can't be uploaded without a moment. Photographers can tag a full card as **Whole day / mixed** — we sort photos by capture time, which is why the time-sync is required.
+
+Files go into the company Dropbox in matching folders, e.g. \`Weddings / 2026-10-10 Ade & Tolu / Video / Toasts & speeches / Daniel Kim · B-cam\`.
+
+## Markers inside a clip
+For long clips — the full ceremony or the speeches — add markers so the editor can jump straight to the beats:
+- In the uploaded files list, click **Add** in the *Markers* column.
+- Type the time inside the clip (\`12:31\` or \`1:02:45\`) and choose what happens: *Vows, Ring exchange, Kiss, Speech starts, Great reaction, Problem (audio/focus)…*
+- Mark problems too. A note like "lav rustle 3:10–3:40" saves a lot of searching.
+
+## In-camera markers
+If your camera can drop shot marks or flags (Sony Shot Mark, Canon/Panasonic clip marks, a slate clap on the recorder), use them on the day and tick **I dropped in-camera markers** when you upload. The editor reads them from the file.
+
+## Wrong tag?
+Change it any time from the *Moment* column — the file moves to the right Dropbox folder automatically.`,
+      },
+      {
+        slug: "backups-and-delivery",
+        title: "Backups: dual cards and three copies in two places",
+        summary: "A wedding can't be reshot. How to protect files from the moment you press record until delivery is confirmed.",
+        minutes: 3,
+        body: `Losing a wedding's files is the one mistake we can't fix. These rules are part of your agreement for every wedding.
+
+## On the day
+- **Record to two cards at once** in every camera that supports it (mirror/backup mode, not overflow or RAW+JPEG split).
+- Audio recorders: record a safety track or a second recorder for vows and speeches.
+- Never format a card at the venue. Full cards go into a labelled, zipped card wallet that stays on your body — not in a car or a bag left under a table.
+
+## The same night: three copies in two places
+1. **Copy 1:** the original cards (don't format them yet).
+2. **Copy 2:** an external drive or your computer.
+3. **Copy 3:** a different physical place — a second drive kept at another address, or a cloud backup.
+
+Start your upload to Visual Weddings within 24 hours and finish within 48. Once a file shows **Uploaded**, it has been checked: it landed in the company Dropbox at full size.
+
+## How long to keep your copies
+Keep **all copies until your coordinator confirms delivery is complete** (you'll get a notification). After that, delete or return every copy when we ask — the files belong to the couple's wedding and to Visual Weddings, not to your archive.
+
+## If something goes wrong
+Corrupt card, failed upload, lost drive: message your coordinator **immediately**. Don't try recovery software that writes to the card — leave it untouched; we'll arrange professional recovery.`,
+      },
+      {
+        slug: "contract-insurance-liability",
+        title: "Your agreement, insurance and liability",
+        summary: "Who owns the footage, the insurance you must carry, and responsibility for damage to equipment or property.",
+        minutes: 4,
+        body: `You sign an Independent Contractor Agreement for every wedding (when you accept a wedding or an offer). Here is what it means in plain English. The agreement itself is what counts — read it before you sign.
+
+## The footage belongs to Visual Weddings
+Everything you shoot, record or edit for a Visual Weddings wedding is a **work made for hire** for Visual Weddings. You assign any rights you might have to the company. You may show a reasonable selection in your personal portfolio only after the couple has received their gallery or film, with credit to Visual Weddings, and never for stock or commercial licensing.
+
+## Insurance you must carry
+- **General liability insurance** of at least **$1,000,000 per occurrence** for your wedding work. Many venues require it and may ask for Visual Weddings to be named as an additional insured — we'll tell you when.
+- **Equipment insurance** for your own gear. We strongly recommend it; if you don't carry it, the risk of loss is yours alone.
+- Keep your certificate up to date under **Licenses**. Expired insurance means you can't be staffed.
+
+## You're responsible for your equipment and for damage you cause
+- **Your equipment is your responsibility.** Loss, theft or damage to your cameras, lenses, drones, lights, cards, vehicles or other property — at the venue, in transit or anywhere else — is not covered by Visual Weddings.
+- **Damage you cause is your responsibility.** If you, your equipment (tripods, light stands, cables, drones) or anyone working with you damages venue property, a guest's property or injures someone, you are responsible for it and your insurance should respond. You agree to cover Visual Weddings for claims that come from your negligence or from breaking the agreement.
+- Tape down cables, sandbag light stands, keep bags out of walkways, and follow venue rules and drone laws.
+
+## Footage, backups and standards
+The agreement also commits you to the [shooting standard](/team/handbook/shooting-standard), [tagging](/team/handbook/tagging-footage) and [backup rules](/team/handbook/backups-and-delivery), and to uploading within 48 hours.
+
+> This page summarises the agreement; it isn't legal or insurance advice. If you're unsure what coverage you need, ask your insurance broker.`,
+      },
+    ],
+  },
+  {
     slug: "photographer-guidelines",
     title: "Photographer Guidelines",
     description: "Roles, coverage expectations and posing for stills.",
@@ -203,10 +329,13 @@ Aim for one formal lined-up shot, one candid "fun" frame and a few small-group s
         summary: "One-page summary of settings, must-have shots and audio.",
         audience: "video",
         minutes: 3,
-        body: `- **Resolution:** 4K, 23.976 or 25 fps to match the editor's timeline. 60 fps for slow-motion moments.
-- **Picture profile:** a flat log profile is preferred; never bake in a LUT.
-- **Shutter:** follow the 180° rule (1/50 at 25 fps) with ND outdoors.
-- **Audio:** lav on the officiant or the partner waiting at the altar, plus a recorder on the podium/DJ feed.
+        body: `Full details: [the shooting standard](/team/handbook/shooting-standard).
+
+- **Resolution:** 4K UHD at **23.976 fps**. 59.94 fps only for slow-motion moments.
+- **Picture profile:** our house log profile for your brand; manual Kelvin white balance; never bake in a LUT.
+- **Shutter:** 1/50 at 23.976 (1/125 at 59.94) with ND outdoors.
+- **Timecode:** time-of-day on every camera and recorder, jam-synced or clock-synced at call time, plus a slate clap.
+- **Audio:** lav on the partner waiting at the altar **and** on the officiant, plus a recorder on the DJ/board feed. Scratch audio always on.
 - **Must-have shots:** processional, vows, ring exchange, kiss, recessional, first dance, toasts in full.`,
       },
       {
@@ -358,8 +487,8 @@ If a couple asks for something outside the package, smile and say *"Let me check
         minutes: 2,
         body: `- Shoot **RAW** (CR3, NEF, ARW, RAF are all fine). JPEG-only uploads are rejected.
 - Do **not** cull or delete in camera. Upload everything; editors cull.
-- Folder name: \`YYYY-MM-DD_Couple_ROLE\` — for example \`2026-10-18_Sarah-James_LEAD\`.
-- Keep a backup of your cards until the gallery has been delivered.`,
+- Record to **both card slots** (mirror mode) and keep three copies in two places until delivery is confirmed — see [backup rules](/team/handbook/backups-and-delivery).
+- The app files your uploads into the right Dropbox folder for you, so you don't need to rename folders.`,
       },
     ],
   },
@@ -378,7 +507,7 @@ If a couple asks for something outside the package, smile and say *"Let me check
         body: `- Hold every shot for **at least 8 seconds**.
 - Capture the ceremony and toasts **uninterrupted** from a locked-off camera.
 - Deliver every clip and every audio file — never trim on set.
-- Folder name: \`YYYY-MM-DD_Couple_VIDEO\`, with sub-folders \`A-CAM\`, \`B-CAM\`, \`AUDIO\`, \`DRONE\`.`,
+- Follow [the shooting standard](/team/handbook/shooting-standard) and [tag every upload](/team/handbook/tagging-footage) with its moment and camera — the app builds the Dropbox folders for you.`,
       },
       {
         slug: "drone-faq",
@@ -417,10 +546,11 @@ If a couple asks for something outside the package, smile and say *"Let me check
         summary: "Step-by-step for photo and video uploads.",
         minutes: 3,
         body: `1. Open **Uploads** and pick the wedding.
-2. Choose the category — *RAW*, *Edited*, *Highlights* for photo; *Footage*, *Ceremony*, *Reception* for video.
-3. Drag files in or click **Select files**. You can add hundreds at once.
-4. Keep the tab open until every file shows **Uploaded**. Video files then show **Processing** while we generate previews.
-5. When finished, the wedding moves to *Delivered* and your payment request opens automatically.`,
+2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*.
+3. In **Tag this batch**, choose the moment and the camera or recorder ([how tagging works](/team/handbook/tagging-footage)). Video needs a moment before you can add files.
+4. Drag files in or click **Select files**. You can add hundreds at once; large videos upload in pieces and resume on their own after a dropped connection.
+5. Keep the tab open until every file shows **Uploaded** — that means it was checked and is safe in the company Dropbox. Video files then show **Processing**.
+6. Add markers to long clips, then keep your backups until your coordinator confirms delivery ([backup rules](/team/handbook/backups-and-delivery)).`,
       },
     ],
   },
