@@ -2,19 +2,21 @@
 import * as React from "react";
 import type { Skill } from "@/lib/skills";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Camera, Video, Smartphone, Check } from "lucide-react";
+import { AlertCircle, Camera, Video, Smartphone, Check, CheckCircle2 } from "lucide-react";
+import { EmailSuggestion } from "@/components/ui/email-hint";
+import { emailError, confirmError } from "@/lib/validation";
 import { Field, Input, Textarea, Select, Alert, Button, Checkbox } from "@/components/ui";
 import { AddressInput } from "@/components/ui/address-input";
 import { applyToTeamAction, type ApplyInput } from "@/lib/actions/auth";
 import { cn } from "@/lib/utils";
 
-type F = { fullName: string; email: string; phone: string; password: string; skills: Skill[]; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
+type F = { fullName: string; email: string; phone: string; password: string; confirmPassword: string; skills: Skill[]; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
 const SKILL_CARDS = [
   { value: "photo", label: "Photographer", blurb: "Lead or second shooter — portraits, candids, family formals", icon: Camera },
   { value: "video", label: "Videographer", blurb: "Films, ceremony and speech coverage, audio, drone", icon: Video },
   { value: "content", label: "Content creator", blurb: "Phone-first reels, behind-the-scenes and same-day teasers", icon: Smartphone },
 ] as const;
-const EMPTY: F = { fullName: "", email: "", phone: "", password: "", skills: [], homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
+const EMPTY: F = { fullName: "", email: "", phone: "", password: "", confirmPassword: "", skills: [], homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
 
 export function JoinForm({ markets }: { markets: { slug: string; label: string }[] }) {
   const router = useRouter();
@@ -24,8 +26,21 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
   const [busy, setBusy] = React.useState(false);
   const set = <K extends keyof F>(k: K, v: F[K]) => { setF((x) => ({ ...x, [k]: v })); setFe((x) => ({ ...x, [k]: "" })); };
   const on = (k: keyof F) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => set(k, e.target.value as never);
+  // Instant checks for email and password confirmation (the server checks again)
+  const local = (k: string): string | undefined => {
+    if (k === "email") return emailError(f.email) ?? undefined;
+    if (k === "password") return f.password.length < 8 ? "Use at least 8 characters" : undefined;
+    if (k === "confirmPassword") return confirmError(f.password, f.confirmPassword) ?? undefined;
+  };
+  const check = (k: string) => setFe((x) => ({ ...x, [k]: local(k) ?? "" }));
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const early = Object.fromEntries(["email", "password", "confirmPassword"].map((k) => [k, local(k)]).filter(([, v]) => v)) as Record<string, string>;
+    if (Object.keys(early).length) {
+      setFe((x) => ({ ...x, ...early })); setMsg("Please fix the highlighted fields.");
+      requestAnimationFrame(() => document.querySelector<HTMLElement>("[aria-invalid=true]")?.focus());
+      return;
+    }
     setBusy(true); setMsg(null);
     try {
       const r = await applyToTeamAction({ ...f } as unknown as ApplyInput);
@@ -38,9 +53,19 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
     <form onSubmit={submit} className="mt-8 space-y-4" noValidate>
       {msg && <Alert tone="danger" icon={AlertCircle}>{msg}</Alert>}
       <Field label="Full name" error={fe.fullName} required htmlFor="j-name"><Input id="j-name" value={f.fullName} onChange={on("fullName")} autoComplete="name" aria-invalid={!!fe.fullName} /></Field>
-      <Field label="Email" error={fe.email} required htmlFor="j-email"><Input id="j-email" type="email" value={f.email} onChange={on("email")} autoComplete="email" aria-invalid={!!fe.email} /></Field>
+      <Field label="Email" error={fe.email} required htmlFor="j-email">
+        <Input id="j-email" type="email" inputMode="email" autoCapitalize="none" spellCheck={false} value={f.email} onChange={(e) => { set("email", e.target.value); if (fe.email) setFe((x) => ({ ...x, email: emailError(e.target.value) ?? "" })); }}
+          onBlur={() => f.email && check("email")} autoComplete="email" aria-invalid={!!fe.email} />
+      </Field>
+      <EmailSuggestion value={f.email} onAccept={(v) => { set("email", v); }} />
       <Field label="Phone" error={fe.phone} required htmlFor="j-phone"><Input id="j-phone" type="tel" value={f.phone} onChange={on("phone")} autoComplete="tel" aria-invalid={!!fe.phone} /></Field>
-      <Field label="Password" error={fe.password} hint="At least 8 characters" required htmlFor="j-pass"><Input id="j-pass" type="password" value={f.password} onChange={on("password")} autoComplete="new-password" aria-invalid={!!fe.password} /></Field>
+      <Field label="Password" error={fe.password} hint="At least 8 characters" required htmlFor="j-pass"><Input id="j-pass" type="password" value={f.password} onChange={on("password")} onBlur={() => f.password && check("password")} autoComplete="new-password" aria-invalid={!!fe.password} /></Field>
+      <Field label="Confirm password" error={fe.confirmPassword} required htmlFor="j-confirm"
+        hint={f.confirmPassword && f.confirmPassword === f.password ? <span className="inline-flex items-center gap-1 text-success-700"><CheckCircle2 className="size-3.5" />Passwords match</span> : undefined}>
+        <Input id="j-confirm" type="password" value={f.confirmPassword} autoComplete="new-password" aria-invalid={!!fe.confirmPassword}
+          onChange={(e) => { set("confirmPassword", e.target.value); if (fe.confirmPassword || (f.password && e.target.value.length >= f.password.length)) setFe((x) => ({ ...x, confirmPassword: confirmError(f.password, e.target.value) ?? "" })); }}
+          onBlur={() => f.confirmPassword && check("confirmPassword")} />
+      </Field>
       <Field label="Home base address" error={fe.homeAddress} required htmlFor="j-home">
         <AddressInput id="j-home" value={f.homeAddress} onChange={(v) => set("homeAddress", v)} aria-invalid={!!fe.homeAddress}
           hint="Used to work out how far each wedding is from you. Never shown to couples." placeholder="Street address you travel from" />

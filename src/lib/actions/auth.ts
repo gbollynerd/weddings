@@ -2,6 +2,7 @@
 import { redirect } from "next/navigation";
 import { skillsLine } from "@/lib/skills";
 import { z } from "zod";
+import { EMAIL_RE } from "@/lib/validation";
 import { sql } from "@/lib/db";
 import { createSession, destroySession, verifyPassword, hashPassword, SUSPENDED_MESSAGE } from "@/lib/auth";
 import { homeFor, type Role } from "@/lib/permissions";
@@ -22,16 +23,20 @@ export async function loginAction(_: ActionResult | null, form: FormData): Promi
   redirect(safeNext(form.get("next")) ?? homeFor(u.role as Role));
 }
 
+const Email = z.string().trim().toLowerCase().max(254, "Enter a valid email address, like name@example.com")
+  .regex(EMAIL_RE, "Enter a valid email address, like name@example.com");
 const SignupSchema = z.object({
   partnerOne: z.string().trim().min(2, "Enter your full name"),
   partnerTwo: z.string().trim().min(2, "Enter your partner's name"),
-  email: z.string().trim().email("Enter a valid email"),
+  email: Email,
   phone: z.string().trim().optional(),
   password: z.string().min(8, "Use at least 8 characters"),
-});
+  // Optional so the booking wizard (which checks it in the browser) can call signupClient directly
+  confirmPassword: z.string().optional(),
+}).refine((d) => d.confirmPassword === undefined || d.confirmPassword === d.password, { path: ["confirmPassword"], message: "Passwords don't match" });
 
 /** Creates a client account. Used by /signup and by the booking flow (account step). */
-export async function signupClient(input: z.infer<typeof SignupSchema>): Promise<ActionResult<{ userId: string }>> {
+export async function signupClient(input: z.input<typeof SignupSchema>): Promise<ActionResult<{ userId: string }>> {
   const parsed = SignupSchema.safeParse(input);
   if (!parsed.success) {
     const fe: Record<string, string> = {};
@@ -59,6 +64,7 @@ export async function signupAction(_: ActionResult | null, form: FormData): Prom
     email: String(form.get("email") ?? ""),
     phone: String(form.get("phone") ?? ""),
     password: String(form.get("password") ?? ""),
+    confirmPassword: String(form.get("confirmPassword") ?? ""),
   });
   if (!r.ok) return { ok: false, message: r.message, fieldErrors: r.fieldErrors };
   redirect(safeNext(form.get("next")) ?? "/client");
@@ -81,9 +87,10 @@ export async function logoutAction() {
 /* ───────────── Freelancer applications (photo / video / content) ───────────── */
 const ApplySchema = z.object({
   fullName: z.string().trim().min(3, "Enter your full name").max(80),
-  email: z.string().trim().email("Enter a valid email"),
+  email: Email,
   phone: z.string().trim().min(7, "Enter a phone number").max(30),
   password: z.string().min(8, "Use at least 8 characters"),
+  confirmPassword: z.string().min(1, "Re-enter your password"),
   skills: z.array(z.enum(["photo", "video", "content"])).min(1, "Choose at least one").max(3),
   homeAddress: z.string().trim().min(6, "Enter your home base address").max(200),
   market: z.string().trim().min(2, "Choose the market you'll mostly work in"),
@@ -93,7 +100,7 @@ const ApplySchema = z.object({
   about: z.string().trim().min(40, "Tell us a little more (40+ characters)").max(1200),
   equipment: z.string().trim().max(800).optional().default(""),
   agree: z.literal(true, { message: "Please confirm" }),
-});
+}).refine((d) => d.confirmPassword === d.password, { path: ["confirmPassword"], message: "Passwords don't match" });
 export type ApplyInput = z.input<typeof ApplySchema>;
 
 /** Public "Join our team" form: creates a limited applicant account until a coordinator approves it. */

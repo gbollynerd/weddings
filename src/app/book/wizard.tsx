@@ -8,12 +8,16 @@ import {
   Users, Clock, Lock, CreditCard, ShieldCheck, Info, Columns3, Heart, Mail, LogIn, UserPlus, Building2,
 } from "lucide-react";
 import { Logo } from "@/components/brand/logo";
-import { Button, Field, Input, Select, Textarea, Alert, Badge, Checkbox } from "@/components/ui";
+import { Button, Field, Input, Select, Textarea, Alert, Badge, Checkbox, buttonClass } from "@/components/ui";
 import { Modal, Tabs, useToast } from "@/components/ui/interactive";
 import { AddressInput } from "@/components/ui/address-input";
 import { WEDDING_TYPES } from "@/content/wedding-types";
 import { checkAvailabilityAction, createBookingAction } from "@/lib/actions/booking";
 import { signupClient, loginInline, logoutAction } from "@/lib/actions/auth";
+import { EmailSuggestion } from "@/components/ui/email-hint";
+import { Markdown } from "@/components/markdown";
+import { SERVICE_AGREEMENT, CANCELLATION_POLICY, type ClientTerm } from "@/content/client-terms";
+import { emailError, confirmError } from "@/lib/validation";
 import { quote, marketPrice, money, DEPOSIT_RATE } from "@/lib/pricing";
 import { cn, fmtDate, fmtLong } from "@/lib/utils";
 import type { Market, Package, Addon } from "@/lib/services/catalog";
@@ -101,7 +105,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
       const x = d.details;
       if (x.partnerOne.trim().length < 2) e.partnerOne = "Required";
       if (x.partnerTwo.trim().length < 2) e.partnerTwo = "Required";
-      if (!/^\S+@\S+\.\S+$/.test(x.email)) e.email = "Enter a valid email";
+      { const ee = emailError(x.email); if (ee) e.email = ee; }
       if (x.phone.replace(/\D/g, "").length < 10) e.phone = "Enter a 10-digit phone number";
       if (x.ceremony.trim().length < 2) e.ceremony = "Where is the ceremony?";
       if (!x.guests || Number(x.guests) < 2) e.guests = "Estimated guest count";
@@ -268,7 +272,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Your name" error={errors.partnerOne} required><Input value={d.details.partnerOne} onChange={(e) => setDetail("partnerOne", e.target.value)} autoComplete="name" aria-invalid={!!errors.partnerOne} /></Field>
                 <Field label="Partner's name" error={errors.partnerTwo} required><Input value={d.details.partnerTwo} onChange={(e) => setDetail("partnerTwo", e.target.value)} aria-invalid={!!errors.partnerTwo} /></Field>
-                <Field label="Email" error={errors.email} required><Input type="email" value={d.details.email} onChange={(e) => setDetail("email", e.target.value)} autoComplete="email" aria-invalid={!!errors.email} /></Field>
+                <Field label="Email" error={errors.email} required><div className="space-y-1.5"><Input type="email" inputMode="email" autoCapitalize="none" spellCheck={false} value={d.details.email} onChange={(e) => setDetail("email", e.target.value)} autoComplete="email" aria-invalid={!!errors.email} /><EmailSuggestion value={d.details.email} onAccept={(v) => setDetail("email", v)} /></div></Field>
                 <Field label="Phone" error={errors.phone} required><Input type="tel" value={d.details.phone} onChange={(e) => setDetail("phone", e.target.value)} autoComplete="tel" placeholder="(704) 555-0123" aria-invalid={!!errors.phone} /></Field>
                 <Field label="Wedding date"><Input value={d.date ? fmtLong(d.date) : ""} disabled /></Field>
                 <Field label="Venue"><Input value={d.venue} disabled /></Field>
@@ -440,9 +444,13 @@ function AccountStep({ me, details, onDone }: { me: Me; details: Details; onDone
     setPending(true); setMsg(""); setErr({});
     try {
       if (mode === "create") {
-        if (f.password !== f.confirm) { setErr({ confirm: "Passwords don't match" }); return; }
-        const r = await signupClient({ partnerOne: details.partnerOne, partnerTwo: details.partnerTwo, email: f.email, phone: details.phone, password: f.password });
-        if (!r.ok) { setErr(r.fieldErrors ?? {}); setMsg(r.message ?? ""); return; }
+        const early: Record<string, string> = {};
+        const eErr = emailError(f.email); if (eErr) early.email = eErr;
+        if (f.password.length < 8) early.password = "Use at least 8 characters";
+        const cErr = confirmError(f.password, f.confirm); if (cErr) early.confirm = cErr;
+        if (Object.keys(early).length) { setErr(early); return; }
+        const r = await signupClient({ partnerOne: details.partnerOne, partnerTwo: details.partnerTwo, email: f.email, phone: details.phone, password: f.password, confirmPassword: f.confirm });
+        if (!r.ok) { const fe = r.fieldErrors ?? {}; setErr({ ...fe, confirm: fe.confirmPassword ?? "" }); setMsg(r.message ?? ""); return; }
         onDone({ role: "client", name: details.partnerOne, email: f.email, phone: details.phone, partnerOne: details.partnerOne, partnerTwo: details.partnerTwo });
       } else {
         const r = await loginInline(f.email, f.password);
@@ -458,9 +466,18 @@ function AccountStep({ me, details, onDone }: { me: Me; details: Details; onDone
         <Tabs value={mode} onChange={(v) => { setMode(v); setMsg(""); setErr({}); }} items={[{ value: "create", label: <span className="flex items-center gap-1.5"><UserPlus className="size-4" />New account</span> }, { value: "login", label: <span className="flex items-center gap-1.5"><LogIn className="size-4" />I have an account</span> }]} />
         <form className="mt-6 space-y-4" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           {msg && <Alert tone="danger">{msg}</Alert>}
-          <Field label="Email" error={err.email}><div className="relative"><Mail className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-midnight-300" /><Input type="email" autoComplete="email" className="pl-10" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} aria-invalid={!!err.email} /></div></Field>
+          <Field label="Email" error={err.email}><div className="relative"><Mail className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-midnight-300" /><Input type="email" autoComplete="email" className="pl-10" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })}
+            onBlur={() => mode === "create" && f.email && setErr((x) => ({ ...x, email: emailError(f.email) ?? "" }))} aria-invalid={!!err.email} inputMode="email" autoCapitalize="none" spellCheck={false} /></div></Field>
+          {mode === "create" && <EmailSuggestion value={f.email} onAccept={(v) => { setF({ ...f, email: v }); setErr((x) => ({ ...x, email: "" })); }} />}
           <Field label="Password" error={err.password} hint={mode === "create" ? "At least 8 characters" : undefined}><Input type="password" autoComplete={mode === "create" ? "new-password" : "current-password"} value={f.password} onChange={(e) => setF({ ...f, password: e.target.value })} aria-invalid={!!err.password} /></Field>
-          {mode === "create" && <Field label="Confirm password" error={err.confirm}><Input type="password" autoComplete="new-password" value={f.confirm} onChange={(e) => setF({ ...f, confirm: e.target.value })} aria-invalid={!!err.confirm} /></Field>}
+          {mode === "create" && (
+            <Field label="Confirm password" error={err.confirm}
+              hint={f.confirm && f.confirm === f.password ? <span className="inline-flex items-center gap-1 text-success-700"><CheckCircle2 className="size-3.5" />Passwords match</span> : undefined}>
+              <Input type="password" autoComplete="new-password" value={f.confirm} aria-invalid={!!err.confirm}
+                onChange={(e) => { setF({ ...f, confirm: e.target.value }); if (err.confirm || (f.password && e.target.value.length >= f.password.length)) setErr((x) => ({ ...x, confirm: confirmError(f.password, e.target.value) ?? "" })); }}
+                onBlur={() => f.confirm && setErr((x) => ({ ...x, confirm: confirmError(f.password, f.confirm) ?? "" }))} />
+            </Field>
+          )}
           <Button type="submit" size="lg" className="w-full" loading={pending}>{mode === "create" ? "Create account & continue" : "Log in & continue"}</Button>
           {mode === "create" && <p className="text-center text-[12px] text-muted">Account name: {details.partnerOne} & {details.partnerTwo}</p>}
           {mode === "login" && <p className="text-center text-[12px] text-muted">Demo client: sarah@visualweddings.test / demo1234</p>}
@@ -473,6 +490,9 @@ function AccountStep({ me, details, onDone }: { me: Me; details: Details; onDone
 function PaymentStep({ plan, setPlan, q, date, onPay }: { plan: Draft["plan"]; setPlan: (p: Draft["plan"]) => void; q: ReturnType<typeof quote>; date: string; onPay: (card: { number: string; exp: string; cvc: string; name: string; zip: string }) => Promise<{ ok: boolean; message?: string }> }) {
   const [card, setCard] = React.useState({ name: "", number: "", exp: "", cvc: "", zip: "" });
   const [agree, setAgree] = React.useState(false);
+  const [terms, setTerms] = React.useState<ClientTerm | null>(null);
+  // Links sit inside the checkbox label, so stop the click from also ticking the box
+  const openTerms = (t: ClientTerm) => (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); setTerms(t); };
   const [err, setErr] = React.useState<Record<string, string>>({});
   const [processing, setProcessing] = React.useState(false);
   const [declined, setDeclined] = React.useState("");
@@ -533,7 +553,14 @@ function PaymentStep({ plan, setPlan, q, date, onPay }: { plan: Draft["plan"]; s
           <div className="mt-4 rounded-2xl border border-dashed border-info-500/30 bg-info-50 p-3 text-[12px] text-midnight-700">
             <b>Test mode.</b> No real charge is made. Use <button type="button" className="font-mono underline" onClick={() => setCard({ name: card.name || "Test Couple", number: "4242 4242 4242 4242", exp: "12/30", cvc: "123", zip: "28202" })}>4242 4242 4242 4242</button> (any future expiry, any CVC) — or <span className="font-mono">4000 0000 0000 0002</span> to see a decline.
           </div>
-          <div className="mt-5"><Checkbox checked={agree} onChange={(e) => setAgree(e.target.checked)} label={<span>I agree to the <a href="#" onClick={(e) => e.preventDefault()} className="underline">service agreement</a> and <a href="#" onClick={(e) => e.preventDefault()} className="underline">cancellation policy</a>.</span>} />{err.agree && <p className="mt-1 text-[12px] font-medium text-danger-500">{err.agree}</p>}</div>
+          <div className="mt-5"><Checkbox checked={agree} onChange={(e) => setAgree(e.target.checked)} label={<span>I agree to the <a href={`/terms/${SERVICE_AGREEMENT.slug}`} onClick={openTerms(SERVICE_AGREEMENT)} className="font-medium underline underline-offset-2 hover:text-ink">service agreement</a> and <a href={`/terms/${CANCELLATION_POLICY.slug}`} onClick={openTerms(CANCELLATION_POLICY)} className="font-medium underline underline-offset-2 hover:text-ink">cancellation policy</a>.</span>} />{err.agree && <p className="mt-1 text-[12px] font-medium text-danger-500">{err.agree}</p>}</div>
+          <Modal open={!!terms} onClose={() => setTerms(null)} size="lg" title={terms?.title} description={terms ? `${terms.summary} Last updated ${terms.updated}.` : undefined}
+            footer={<>
+              {terms && <a href={`/terms/${terms.slug}`} target="_blank" rel="noopener" className={buttonClass("outline")}>Open in a new tab</a>}
+              <Button onClick={() => setTerms(null)}>Done</Button>
+            </>}>
+            {terms && <Markdown source={terms.body} />}
+          </Modal>
           <Button size="lg" className="mt-6 w-full rounded-full" loading={processing} onClick={pay} icon={processing ? undefined : Lock}>{processing ? "Processing payment…" : `Pay ${money(now)} & confirm booking`}</Button>
         </div>
       </div>

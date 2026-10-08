@@ -28,7 +28,7 @@ export function SiteFooter() {
       <div className="border-t border-white/10">
         <div className="mx-auto flex max-w-7xl flex-col gap-2 px-5 py-6 text-[12px] text-white/50 sm:flex-row sm:justify-between sm:px-8">
           <p>© {new Date().getFullYear()} Visual Weddings. All rights reserved.</p>
-          <p>Demo build · Sample content and imagery for illustration · <Link href="/login" className="underline">Team portal</Link></p>
+          <p><Link href="/terms/service-agreement" className="underline">Service agreement</Link> · <Link href="/terms/cancellation-policy" className="underline">Cancellation policy</Link> · Demo build · Sample content and imagery for illustration · <Link href="/login" className="underline">Team portal</Link></p>
         </div>
       </div>
     </footer>
