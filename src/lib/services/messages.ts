@@ -56,11 +56,11 @@ export async function sendMessage(userId: string, conversationId: string, body: 
 }
 
 const STAFF = ["coordinator", "admin"];
-const TEAM = ["photographer", "videographer"];
+const TEAM = ["freelancer"];
 
 /**
  * Who may message whom:
- * - coordinators, admins, photographers and videographers can message each other freely
+ * - coordinators, admins, freelancers (photo, video, content) can message each other freely
  * - clients only ever talk to coordinators/admins — never directly to photographers or videographers
  */
 export async function startConversation(userId: string, subject: string, body: string, opts: { weddingId?: string | null; includeUserIds?: string[] } = {}) {
@@ -86,13 +86,13 @@ export async function startConversation(userId: string, subject: string, body: s
   return c.id as string;
 }
 
-export type Contact = { id: string; full_name: string; avatar_url: string | null; role: string };
+export type Contact = { id: string; full_name: string; avatar_url: string | null; role: string; skills: string[] | null };
 /** People a user may start a thread with. Clients: coordinators/admins only. Everyone else: all active staff and team. */
 export async function contactsFor(userId: string): Promise<Contact[]> {
   const [me] = await sql`select role from users where id = ${userId}`;
   const roles = me?.role === "client" ? STAFF : [...STAFF, ...TEAM];
   return sql<Contact[]>`
-    select u.id, u.full_name, u.avatar_url, u.role from users u left join team_members t on t.user_id = u.id
+    select u.id, u.full_name, u.avatar_url, u.role, t.skills from users u left join team_members t on t.user_id = u.id
     where u.id <> ${userId} and u.status = 'active' and u.role in ${sql(roles)} and (t.id is null or t.status = 'active')
     order by case when u.role in ('coordinator','admin') then 0 else 1 end, u.full_name`;
 }
@@ -111,7 +111,7 @@ const names = (rows: { full_name: string }[]) =>
   rows.length <= 2 ? rows.map((r) => r.full_name).join(" and ") : `${rows.slice(0, -1).map((r) => r.full_name).join(", ")} and ${rows.at(-1)!.full_name}`;
 
 /**
- * Coordinators/admins can loop staff, photographers and videographers into an existing thread — including one with a client.
+ * Coordinators/admins can loop staff and freelancers into an existing thread — including one with a client.
  * That's the only way a photographer/videographer ends up talking with a client. Clients are never added this way.
  */
 export async function addParticipants(actorId: string, conversationId: string, userIds: string[]) {

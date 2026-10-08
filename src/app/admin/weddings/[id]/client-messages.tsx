@@ -47,7 +47,7 @@ export function ClientMessages({ weddingId, couple, firstName, threads, canMessa
         </ul>
       )}
       <Modal open={open} onClose={() => setOpen(false)} title={`Message ${couple}`}
-        description="Starts a new conversation between you and the couple. You can loop in their photographer or videographer from the conversation later."
+        description="Starts a new conversation between you and the couple. You can loop in their photographer, videographer or content creator from the conversation later."
         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button icon={Send} loading={pending} onClick={send}>Send message</Button></>}>
         <div className="space-y-4">
           <Field label="Subject" error={errors.subject}><Input value={subject} onChange={(e) => setSubject(e.target.value)} aria-invalid={!!errors.subject} /></Field>

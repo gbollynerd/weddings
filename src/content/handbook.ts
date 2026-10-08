@@ -5,7 +5,7 @@ export type HandbookArticleSeed = {
   slug: string;
   title: string;
   summary: string;
-  audience?: "all" | "photo" | "video";
+  audience?: "all" | "photo" | "video" | "content";
   minutes?: number;
   body: string;
 };
@@ -163,6 +163,12 @@ If anything goes wrong, stay calm, solve what you can, and message your coordina
 4. On-camera scratch audio **always on** — it's how the edit syncs everything.
 5. 48 kHz, 24-bit (or 32-bit float). Monitor with headphones during vows and speeches.
 
+## Content creators
+- Phone or camera set to **4K, 30 fps** (60 fps for slow-motion moments), **vertical 9:16** unless the coordinator asks for horizontal.
+- Lock exposure and focus on faces; turn on HDR video only if every clip from the day uses it.
+- Phone clock on network time — it's how your clips line up with the film and photos.
+- Record the vows, first kiss and first dance on video even if you also take photos of them.
+
 ## Photography
 - RAW only, **dual card slots recording to both cards** (backup/mirror mode, not overflow).
 - Camera clocks synced at call time (see time-sync).
@@ -182,7 +188,9 @@ Check that every card has recorded to both slots, and that audio files exist for
 1. Open **Uploads** and pick the wedding.
 2. In **Tag this batch**, choose the **moment** (Getting ready, Ceremony, Toasts & speeches, First dance…) and the **camera or recorder** (A-cam, B-cam, Drone, Audio · lav on officiant…).
 3. Add the files for that moment and camera. Then change the tags and add the next batch.
-4. Video can't be uploaded without a moment. Photographers can tag a full card as **Whole day / mixed** — we sort photos by capture time, which is why the time-sync is required.
+4. Video can't be uploaded without a moment. Photographers and content creators can tag a full card as **Whole day / mixed** — we sort by capture time, which is why the time-sync is required.
+
+There's one **Uploads** page for everyone. Pick the wedding and the page asks for what your role on that wedding needs: photos for photographers, video and audio for videographers, clips, phone photos and finished reels for content creators.
 
 Files go into the company Dropbox in matching folders, e.g. \`Weddings / 2026-10-10 Ade & Tolu / Video / Toasts & speeches / Daniel Kim · B-cam\`.
 
@@ -247,6 +255,41 @@ Everything you shoot, record or edit for a Visual Weddings wedding is a **work m
 The agreement also commits you to the [shooting standard](/team/handbook/shooting-standard), [tagging](/team/handbook/tagging-footage) and [backup rules](/team/handbook/backups-and-delivery), and to uploading within 48 hours.
 
 > This page summarises the agreement; it isn't legal or insurance advice. If you're unsure what coverage you need, ask your insurance broker.`,
+      },
+    ],
+  },
+  {
+    slug: "content-creator-guidelines",
+    title: "Content Creator Guidelines",
+    description: "Phone-first reels, behind-the-scenes and same-day teasers.",
+    icon: "Smartphone",
+    articles: [
+      {
+        slug: "content-creator-guide",
+        title: "Content creator guide",
+        summary: "What couples book a content creator for, and how to deliver it.",
+        audience: "content",
+        minutes: 4,
+        body: `Couples add a content creator to get **social-ready content fast**: vertical reels, behind-the-scenes moments and a same-day teaser they can post that night. You work alongside the photographer and videographer — never in their way.
+
+## What to deliver
+- **Same-day teaser:** a 15–30 second vertical reel delivered to your coordinator before the end of the reception.
+- **Raw clips & phone photos:** everything you shot, uploaded within 48 hours.
+- **2–3 finished reels** within 7 days, using the couple's style notes from the questionnaire.
+
+## On the day
+- Shoot vertical 9:16, 4K, 30 fps (60 fps for slow motion). Phone clock on network time.
+- Stay out of the photographer's and videographer's lines during the processional, vows and first dance — ask the leads where to stand.
+- Capture what the other teams don't: getting-ready energy, guest reactions, details in motion, the dance floor from inside.
+- Bring a gimbal or stabiliser, two charged power banks and enough free storage for the whole day.
+
+## Posting and privacy
+- Everything you shoot belongs to Visual Weddings and the couple. **Never post to your own accounts** before the couple has posted, and only with credit to Visual Weddings.
+- Don't film guests who ask not to be filmed, and keep children's faces out of public posts unless the couple approves.
+- Use licensed or platform-provided music only.
+
+## Uploading
+Open **Uploads**, pick the wedding, and tag each batch with the moment and device. Use *Raw clips & photos* for everything you shot and *Finished reels* for edits. Add markers to long clips the editor should look at first.`,
       },
     ],
   },
@@ -545,8 +588,8 @@ If a couple asks for something outside the package, smile and say *"Let me check
         title: "How to upload",
         summary: "Step-by-step for photo and video uploads.",
         minutes: 3,
-        body: `1. Open **Uploads** and pick the wedding.
-2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*.
+        body: `1. Open **Uploads** and pick the wedding. What you can upload follows your role on that wedding.
+2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*. Content creators: *Raw clips & photos* or *Finished reels*.
 3. In **Tag this batch**, choose the moment and the camera or recorder ([how tagging works](/team/handbook/tagging-footage)). Video needs a moment before you can add files.
 4. Drag files in or click **Select files**. You can add hundreds at once; large videos upload in pieces and resume on their own after a dropped connection.
 5. Keep the tab open until every file shows **Uploaded** — that means it was checked and is safe in the company Dropbox. Video files then show **Processing**.

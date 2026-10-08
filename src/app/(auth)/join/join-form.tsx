@@ -1,14 +1,15 @@
 "use client";
 import * as React from "react";
+import type { Skill } from "@/lib/skills";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Camera, Video } from "lucide-react";
+import { AlertCircle, Camera, Video, Smartphone } from "lucide-react";
 import { Field, Input, Textarea, Select, Alert, Button, Checkbox } from "@/components/ui";
 import { AddressInput } from "@/components/ui/address-input";
 import { applyToTeamAction, type ApplyInput } from "@/lib/actions/auth";
 import { cn } from "@/lib/utils";
 
-type F = { fullName: string; email: string; phone: string; password: string; discipline: "" | "photo" | "video"; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
-const EMPTY: F = { fullName: "", email: "", phone: "", password: "", discipline: "", homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
+type F = { fullName: string; email: string; phone: string; password: string; skills: Skill[]; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
+const EMPTY: F = { fullName: "", email: "", phone: "", password: "", skills: [], homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
 
 export function JoinForm({ markets }: { markets: { slug: string; label: string }[] }) {
   const router = useRouter();
@@ -22,7 +23,7 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
     e.preventDefault();
     setBusy(true); setMsg(null);
     try {
-      const r = await applyToTeamAction({ ...f, discipline: f.discipline || undefined } as unknown as ApplyInput);
+      const r = await applyToTeamAction({ ...f } as unknown as ApplyInput);
       if (r.ok) { router.push("/team"); router.refresh(); return; }
       setFe(r.fieldErrors ?? {}); setMsg(r.message ?? "Something went wrong.");
       requestAnimationFrame(() => document.querySelector<HTMLElement>("[aria-invalid=true]")?.focus());
@@ -32,16 +33,19 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
     <form onSubmit={submit} className="mt-8 space-y-4" noValidate>
       {msg && <Alert tone="danger" icon={AlertCircle}>{msg}</Alert>}
       <fieldset>
-        <legend className="mb-1.5 text-[13px] font-medium text-midnight-700">I shoot <span className="text-blush-500">*</span></legend>
-        <div className="grid grid-cols-2 gap-2" role="radiogroup">
-          {([["photo", "Photography", Camera], ["video", "Videography", Video]] as const).map(([v, label, I]) => (
-            <label key={v} className={cn("flex cursor-pointer items-center gap-2 rounded-2xl border p-3 text-sm font-medium transition", f.discipline === v ? "border-midnight-900 ring-2 ring-midnight-900/10" : "border-line hover:border-midnight-200")}>
-              <input type="radio" name="discipline" value={v} checked={f.discipline === v} onChange={() => set("discipline", v)} className="sr-only" />
-              <I className="size-4 text-midnight-500" />{label}
-            </label>
-          ))}
+        <legend className="mb-1.5 text-[13px] font-medium text-midnight-700">I work as <span className="text-blush-500">*</span> <span className="font-normal text-muted">— choose all that apply</span></legend>
+        <div className="grid gap-2 sm:grid-cols-3" role="group">
+          {([["photo", "Photographer", Camera], ["video", "Videographer", Video], ["content", "Content creator", Smartphone]] as const).map(([v, label, I]) => {
+            const on = f.skills.includes(v);
+            return (
+              <label key={v} className={cn("flex cursor-pointer items-center gap-2 rounded-2xl border p-3 text-sm font-medium transition", on ? "border-midnight-900 ring-2 ring-midnight-900/10" : "border-line hover:border-midnight-200")}>
+                <input type="checkbox" name="skills" value={v} checked={on} onChange={() => set("skills", on ? f.skills.filter((x) => x !== v) : [...f.skills, v])} className="size-4 accent-midnight-900" />
+                <I className="size-4 text-midnight-500" />{label}
+              </label>
+            );
+          })}
         </div>
-        {fe.discipline && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.discipline}</p>}
+        {fe.skills && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.skills}</p>}
       </fieldset>
       <Field label="Full name" error={fe.fullName} required htmlFor="j-name"><Input id="j-name" value={f.fullName} onChange={on("fullName")} autoComplete="name" aria-invalid={!!fe.fullName} /></Field>
       <Field label="Email" error={fe.email} required htmlFor="j-email"><Input id="j-email" type="email" value={f.email} onChange={on("email")} autoComplete="email" aria-invalid={!!fe.email} /></Field>

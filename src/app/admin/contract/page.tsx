@@ -10,7 +10,7 @@ export default async function ContractPage() {
   const [t, history] = await Promise.all([activeTemplate(), templateHistory()]);
   return (
     <div>
-      <p className="mb-6 max-w-3xl text-sm text-muted">The independent contractor agreement photographers and videographers sign before taking a wedding. Each signature keeps a frozen copy, so edits only apply to future signatures.</p>
+      <p className="mb-6 max-w-3xl text-sm text-muted">The independent contractor agreement freelancers (photographers, videographers and content creators) sign before taking a wedding. Each signature keeps a frozen copy, so edits only apply to future signatures.</p>
       <ContractEditor
         current={{ version: t.version, title: t.title, body: t.body, created_at: new Date(t.created_at).toISOString(), created_by_name: t.created_by_name }}
         placeholders={CONTRACT_PLACEHOLDERS}

@@ -104,6 +104,7 @@ export const ADDONS = [
   { slug: "additional-hour", name: "Additional hour", description: "Extend coverage for the whole team.", price: 350, unit: "hour", applies: ["photo", "video", "both"] },
   { slug: "drone-coverage", name: "Drone coverage", description: "FAA-certified aerials of your venue and ceremony.", price: 500, unit: "flat", applies: ["video", "both"] },
   { slug: "highlight-video", name: "Highlight video", description: "A 3-minute highlight film from a solo videographer.", price: 1200, unit: "flat", applies: ["photo"] },
+  { slug: "content-creator", name: "Content creator", description: "A dedicated creator for phone-shot reels, behind-the-scenes and a same-day teaser for your socials.", price: 900, unit: "flat", applies: ["photo", "video", "both"] },
   { slug: "full-ceremony-video", name: "Full ceremony video", description: "Multi-camera edit of the entire ceremony with clean audio.", price: 650, unit: "flat", applies: ["video", "both"] },
   { slug: "reception-coverage", name: "Extended reception coverage", description: "Two more hours of party, exit and late-night moments.", price: 700, unit: "flat", applies: ["photo", "video", "both"] },
   { slug: "heirloom-album", name: "Heirloom album", description: "A 10×10 lay-flat linen album, 30 spreads.", price: 900, unit: "flat", applies: ["photo", "both"] },

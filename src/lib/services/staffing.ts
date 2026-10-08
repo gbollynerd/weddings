@@ -1,4 +1,5 @@
 import "server-only";
+import { skillForRole } from "@/lib/skills";
 import { STANDARDS_VERSION } from "@/content/standards";
 import { sql, num } from "@/lib/db";
 import { notify } from "./notifications";
@@ -105,7 +106,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
   const [a] = await db`select a.id, a.role, a.wedding_id, a.team_member_id, w.wedding_date::text as date, w.venue_lat, w.venue_lng, m.slug as market_slug
     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
   if (!a) return [];
-  const discipline = a.role.endsWith("photo") ? "photo" : "video";
+  const skill = skillForRole(a.role);
   const rows = await db`
     select t.id, u.full_name, u.avatar_url, t.rating, t.lat, t.lng, mk.slug as market_slug, mk.city,
       (select status from availability av where av.team_member_id = t.id and av.date = ${a.date}) as calendar,
@@ -118,7 +119,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
       (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs,
       exists(select 1 from standards_acknowledgments s where s.team_member_id = t.id and s.version = ${STANDARDS_VERSION}) as standards_ok
     from team_members t join users u on u.id = t.user_id left join markets mk on mk.id = t.home_market_id
-    where t.discipline = ${discipline} and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
+    where ${skill} = any(t.skills) and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
   const venue = { lat: a.venue_lat, lng: a.venue_lng, market_slug: a.market_slug };
   return rows.map((r) => {
     const distance = distanceTo({ lat: r.lat, lng: r.lng, market_slug: r.market_slug }, venue);

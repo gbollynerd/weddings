@@ -1,19 +1,20 @@
 "use client";
 import * as React from "react";
+import { SKILLS, skillPerson, skillsLine } from "@/lib/skills";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  UserCheck, UserX, Ban, RotateCcw, KeyRound, Shuffle, ExternalLink, ShieldCheck, ShieldAlert, Camera, Video, Copy, Users, MoreHorizontal, Star, AlertTriangle, AtSign as Instagram,
+  UserCheck, UserX, Ban, RotateCcw, KeyRound, Shuffle, ExternalLink, ShieldCheck, ShieldAlert, Camera, Video, Smartphone, Copy, Users, MoreHorizontal, Star, AlertTriangle, AtSign as Instagram,
 } from "lucide-react";
-import { Card, Button, Badge, StatusBadge, Avatar, EmptyState, Field, Textarea, Select, Alert, DescList } from "@/components/ui";
+import { Card, Button, Badge, StatusBadge, Avatar, EmptyState, Field, Textarea, Select, Alert, DescList, Checkbox } from "@/components/ui";
 import { Modal, Menu, MenuItem, useAction, useToast } from "@/components/ui/interactive";
-import { approveApplicantAction, rejectApplicantAction, suspendUserAction, reactivateUserAction, changeRoleAction, resetPasswordAction } from "@/lib/actions/people";
+import { approveApplicantAction, rejectApplicantAction, suspendUserAction, reactivateUserAction, changeRoleAction, resetPasswordAction, setSkillsAction } from "@/lib/actions/people";
 import { fmtDate, ago, cn } from "@/lib/utils";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type P = Record<string, any>;
 type Tab = "applicants" | "team" | "clients" | "staff";
-const ROLE: Record<string, string> = { photographer: "Photographer", videographer: "Videographer", coordinator: "Coordinator", admin: "Administrator", client: "Client" };
+const ROLE: Record<string, string> = { freelancer: "Freelancer", coordinator: "Coordinator", admin: "Administrator", client: "Client" };
 const DOC: Record<string, string> = { drivers_license: "Driver's license", insurance: "Liability insurance", w9: "W-9", business_license: "Business license", other: "Other" };
 
 export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: string; role: string } }) {
@@ -24,10 +25,11 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
   const [dlg, setDlg] = React.useState<{ kind: "reject" | "suspend" | "role"; p: P } | null>(null);
   const [text, setText] = React.useState("");
   const [role, setRole] = React.useState("");
+  const [skills, setSkills] = React.useState<string[]>([]);
   const [temp, setTemp] = React.useState<{ name: string; email: string; password: string } | null>(null);
   const done = () => { setDlg(null); setView(null); router.refresh(); };
   const canManage = (p: P) => p.user_id !== me.id && (me.role === "admin" || !["coordinator", "admin"].includes(p.role));
-  const open = (kind: "reject" | "suspend" | "role", p: P) => { setText(""); setRole(kind === "role" ? roleOptions(p, me)[0] ?? "" : ""); setDlg({ kind, p }); };
+  const open = (kind: "reject" | "suspend" | "role", p: P) => { setText(""); setRole(kind === "role" ? roleOptions(p, me)[0] ?? "" : ""); setSkills(p.skills ?? []); setDlg({ kind, p }); };
   const reset = (p: P) => run(async () => {
     const r = await resetPasswordAction(p.user_id);
     if (r.ok && r.data) setTemp({ name: p.full_name, email: p.email, password: r.data.temp });
@@ -35,7 +37,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
   });
 
   if (!rows.length)
-    return <Card><EmptyState icon={Users} title={tab === "applicants" ? "No applications waiting" : "Nobody here yet"} description={tab === "applicants" ? "New photographer and videographer applications from /join show up here." : undefined} /></Card>;
+    return <Card><EmptyState icon={Users} title={tab === "applicants" ? "No applications waiting" : "Nobody here yet"} description={tab === "applicants" ? "New applications from /join (photographers, videographers and content creators) show up here." : undefined} /></Card>;
 
   return (
     <>
@@ -48,7 +50,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
                 <p className="font-semibold text-ink">{p.full_name}</p>
                 <p className="truncate text-[13px] text-muted">{p.email} · {p.phone}</p>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  <Badge tone={p.discipline === "photo" ? "blush" : "info"}>{p.discipline === "photo" ? <Camera className="size-3" /> : <Video className="size-3" />}{p.discipline === "photo" ? "Photographer" : "Videographer"}</Badge>
+                  <SkillBadges skills={p.skills} />
                   <Badge>{p.years_experience} yrs</Badge>{p.city && <Badge>{p.city}, {p.state}</Badge>}
                   <DocsBadge p={p} />
                 </div>
@@ -77,7 +79,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
                     <p className="truncate text-[13px] text-muted">{p.email}{tab === "team" && p.city ? ` · ${p.city}, ${p.state}` : ""}{tab === "clients" && p.next_wedding ? ` · wedding ${fmtDate(p.next_wedding)}` : ""}</p>
                   </button>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <Badge>{ROLE[p.role]}</Badge>
+                    {p.role === "freelancer" ? <SkillBadges skills={p.skills} /> : <Badge>{ROLE[p.role]}</Badge>}
                     {p.account_status === "suspended" ? <StatusBadge status="suspended" /> : tab === "team" && p.member_status !== "active" ? <StatusBadge status={p.member_status} /> : null}
                     {tab === "team" && <DocsBadge p={p} />}
                     {tab === "team" && p.late_cancels > 0 && <Badge tone="danger">{p.late_cancels} late cancel{p.late_cancels > 1 ? "s" : ""}</Badge>}
@@ -94,7 +96,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
       </div>
 
       {/* Person details */}
-      <Modal open={!!view} onClose={() => setView(null)} size="lg" title={view?.full_name} description={view ? `${ROLE[view.role]} · joined ${fmtDate(view.created_at)}` : ""}
+      <Modal open={!!view} onClose={() => setView(null)} size="lg" title={view?.full_name} description={view ? `${view.role === "freelancer" ? skillsLine(view.skills) : ROLE[view.role]} · joined ${fmtDate(view.created_at)}` : ""}
         icon={view ? <Avatar name={view.full_name} src={view.avatar_url} size={44} /> : undefined}
         footer={view && canManage(view) ? <div className="flex w-full flex-wrap justify-end gap-2">
           {view.member_status === "applicant" && <><Button variant="outline" icon={UserX} onClick={() => open("reject", view)}>Decline</Button><Button icon={UserCheck} loading={pending} onClick={() => run(() => approveApplicantAction(view.user_id), { onSuccess: done })}>Approve</Button></>}
@@ -109,7 +111,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
 
       {/* Decline application / suspend / change role */}
       <Modal open={!!dlg} onClose={() => setDlg(null)} size="sm"
-        title={dlg?.kind === "reject" ? "Decline application" : dlg?.kind === "suspend" ? "Suspend account" : "Change role"}
+        title={dlg?.kind === "reject" ? "Decline application" : dlg?.kind === "suspend" ? "Suspend account" : dlg?.p.role === "freelancer" ? "Edit skills" : "Change role"}
         description={dlg?.p.full_name}
         footer={<><Button variant="outline" onClick={() => setDlg(null)}>Cancel</Button>
           <Button variant={dlg?.kind === "role" ? "primary" : "danger"} loading={pending} onClick={() => {
@@ -117,13 +119,22 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
             const id = dlg.p.user_id;
             if (dlg.kind === "reject") run(() => rejectApplicantAction(id, text), { onSuccess: done });
             else if (dlg.kind === "suspend") run(() => suspendUserAction(id, text), { onSuccess: done });
+            else if (dlg.p.role === "freelancer") run(() => setSkillsAction(id, skills), { onSuccess: done });
             else run(() => changeRoleAction(id, role), { onSuccess: done });
-          }}>{dlg?.kind === "reject" ? "Decline" : dlg?.kind === "suspend" ? "Suspend" : "Change role"}</Button></>}>
-        {dlg?.kind === "role" ? (
+          }}>{dlg?.kind === "reject" ? "Decline" : dlg?.kind === "suspend" ? "Suspend" : dlg?.p.role === "freelancer" ? "Save skills" : "Change role"}</Button></>}>
+        {dlg?.kind === "role" && dlg.p.role === "freelancer" ? (
+          <div className="space-y-2 text-sm">
+            {SKILLS.map((s) => (
+              <Checkbox key={s.value} label={s.person} checked={skills.includes(s.value)}
+                onChange={() => setSkills((x) => (x.includes(s.value) ? x.filter((v) => v !== s.value) : [...x, s.value]))} />
+            ))}
+            <p className="pt-1 text-muted">They can request jobs for every skill ticked here. A skill they&apos;re booked for upcoming can&apos;t be removed until those weddings are done or reassigned.</p>
+          </div>
+        ) : dlg?.kind === "role" ? (
           roleOptions(dlg.p, me).length ? (
             <div className="space-y-3 text-sm">
               <Field label="New role"><Select value={role} onChange={(e) => setRole(e.target.value)}>{roleOptions(dlg.p, me).map((r) => <option key={r} value={r}>{ROLE[r]}</option>)}</Select></Field>
-              <p className="text-muted">They&apos;ll be signed out and see the new role next time they log in.{["photographer", "videographer"].includes(dlg.p.role) ? " Their upcoming weddings must be reassigned first." : ""}</p>
+              <p className="text-muted">They&apos;ll be signed out and see the new role next time they log in.{["freelancer"].includes(dlg.p.role) ? " Their upcoming weddings must be reassigned first." : ""}</p>
             </div>
           ) : <p className="text-sm text-muted">There&apos;s no other role this account can move to.</p>
         ) : (
@@ -153,8 +164,15 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
   );
 }
 
+function SkillBadges({ skills }: { skills: string[] | null }) {
+  return <>{(skills ?? []).map((s) => {
+    const I = s === "photo" ? Camera : s === "video" ? Video : Smartphone;
+    return <Badge key={s} tone={s === "photo" ? "blush" : s === "video" ? "info" : "warning"}><I className="size-3" />{skillPerson(s)}</Badge>;
+  })}</>;
+}
+
 function roleOptions(p: P, me: { role: string }) {
-  if (["photographer", "videographer"].includes(p.role)) return ["photographer", "videographer"].filter((r) => r !== p.role);
+  if (p.role === "freelancer") return ["skills"];
   if (["coordinator", "admin"].includes(p.role) && me.role === "admin") return ["coordinator", "admin"].filter((r) => r !== p.role);
   return [];
 }
@@ -170,7 +188,7 @@ function PersonMenu({ p, me, onSuspend, onReactivate, onRole, onReset }: { p: P;
     <Menu trigger={({ toggle }) => <Button variant="ghost" size="icon" onClick={toggle} aria-label={`Manage ${p.full_name}`}><MoreHorizontal className="size-5" /></Button>}>
       {(close) => (
         <>
-          {roleOptions(p, me).length > 0 && <MenuItem icon={Shuffle} onClick={() => { close(); onRole(); }}>Change role</MenuItem>}
+          {roleOptions(p, me).length > 0 && <MenuItem icon={Shuffle} onClick={() => { close(); onRole(); }}>{p.role === "freelancer" ? "Edit skills" : "Change role"}</MenuItem>}
           <MenuItem icon={KeyRound} onClick={() => { close(); onReset(); }}>Reset password</MenuItem>
           {p.account_status === "suspended" ? <MenuItem icon={RotateCcw} onClick={() => { close(); onReactivate(); }}>Reactivate</MenuItem>
             : <MenuItem icon={Ban} danger onClick={() => { close(); onSuspend(); }}>Suspend</MenuItem>}

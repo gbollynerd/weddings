@@ -1,5 +1,5 @@
 /**
- * The standards every photographer and videographer accepts before taking weddings.
+ * The standards every freelancer (photographer, videographer or content creator) accepts before taking weddings.
  * Bump STANDARDS_VERSION when these change materially — everyone is asked to accept again.
  */
 export const STANDARDS_VERSION = 1;
@@ -13,6 +13,7 @@ export const STANDARDS: { title: string; href: string; points: string[] }[] = [
       "Time-of-day timecode on every camera and recorder, synced at call time, plus a slate clap.",
       "Dedicated audio: lav on the partner at the altar and on the officiant, plus a DJ/board recorder.",
       "Photo: RAW only, camera clocks synced at call time.",
+      "Content: vertical 4K, phone clock on network time, never posted to your own accounts first.",
     ],
   },
   {

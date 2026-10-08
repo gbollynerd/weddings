@@ -1,4 +1,5 @@
 import { CheckCircle2, Circle, Clock, XCircle, ShieldCheck, UserRound, BookOpen } from "lucide-react";
+import { skillsLine } from "@/lib/skills";
 import { Card, CardBody, ButtonLink, Alert } from "@/components/ui";
 import { licenses, profileCompletion, REQUIRED_DOCS, type Member } from "@/lib/services/team";
 import { fmtDate } from "@/lib/utils";
@@ -20,7 +21,7 @@ export async function ApplicationStatus({ member }: { member: Member }) {
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <div>
-        <p className="text-sm text-muted">{member.discipline === "photo" ? "Photographer" : "Videographer"} application</p>
+        <p className="text-sm text-muted">{skillsLine(member.skills)} application</p>
         <h2 className="text-2xl font-semibold text-ink">{rejected ? "Thanks for applying" : `Welcome, ${member.full_name.split(" ")[0]}.`}</h2>
       </div>
       {rejected ? (

@@ -9,7 +9,7 @@ const refresh = () => { revalidatePath("/team/uploads", "layout"); revalidatePat
 
 /** Change the moment / camera a file is tagged with (uploader or coordinator). */
 export async function retagUploadAction(id: string, input: { moment?: string | null; source?: string | null }): Promise<ActionResult> {
-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
+  const user = await requireUser(["freelancer", "coordinator", "admin"]);
   const r = await up.retagUpload(user, id, input);
   if (r.ok) refresh();
   return { ok: r.ok, message: r.message };
@@ -17,7 +17,7 @@ export async function retagUploadAction(id: string, input: { moment?: string | n
 
 /** Add a timecode marker inside a clip, e.g. vows at 12:31. */
 export async function addMarkerAction(uploadId: string, input: { time: string; beat: string; note?: string }): Promise<ActionResult<{ id: string; at: number }>> {
-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
+  const user = await requireUser(["freelancer", "coordinator", "admin"]);
   const at = parseTimecode(input.time);
   if (at === null) return { ok: false, message: "Enter a time like 12:31 or 1:02:45.", fieldErrors: { time: "Use mm:ss or h:mm:ss" } };
   const r = await up.addMarker(user, uploadId, { at, beat: input.beat, note: input.note });
@@ -26,7 +26,7 @@ export async function addMarkerAction(uploadId: string, input: { time: string; b
 }
 
 export async function deleteMarkerAction(markerId: string): Promise<ActionResult> {
-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
+  const user = await requireUser(["freelancer", "coordinator", "admin"]);
   const r = await up.deleteMarker(user, markerId);
   if (r.ok) refresh();
   return r;

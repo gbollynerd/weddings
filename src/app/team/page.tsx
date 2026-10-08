@@ -95,7 +95,7 @@ export default async function TeamOverview() {
                 <Card className="grid place-items-center p-6 text-center">
                   <div>
                     <p className="font-medium text-ink">Room for one more?</p>
-                    <p className="mt-1 text-sm text-muted">{open.length} open weddings match your discipline.</p>
+                    <p className="mt-1 text-sm text-muted">{open.length} open weddings match your skills.</p>
                     <ButtonLink href="/team/open" variant="outline" size="sm" className="mt-4">Browse</ButtonLink>
                   </div>
                 </Card>

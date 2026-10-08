@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
+import { SKILLS, skillForRole, skillPerson, type Skill } from "@/lib/skills";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   CalendarDays, Clock, MapPin, Camera, Video, Navigation, CircleDollarSign, Users, AlertTriangle, CheckCircle2, Search, SlidersHorizontal,
-  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert,
+  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert, Smartphone,
 } from "lucide-react";
 import { Button, ButtonLink, StatusBadge, Badge, Select, Input, EmptyState, Alert, Field, Textarea } from "@/components/ui";
 import { Modal, Tabs, useAction, useToast } from "@/components/ui/interactive";
@@ -19,7 +20,7 @@ import type { Opportunity } from "@/lib/services/team";
 type Item = Omit<Opportunity, "expires_at"> & { expires_at: string | null };
 type Tab = "offered" | "available" | "pending" | "accepted" | "closed" | "declined";
 
-export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
+export function OpenWeddingsBoard({ items, skills, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; skills: string[]; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
   const router = useRouter();
   const toast = useToast();
   const { run, pending } = useAction();
@@ -28,7 +29,9 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
     return init?.view_status === "offered" ? "offered" : init?.view_status === "pending" ? "pending" : items.some((i) => i.view_status === "offered") ? "offered" : "available";
   });
   const [q, setQ] = React.useState("");
-  const [service, setService] = React.useState<"all" | "photo" | "video">(discipline);
+  // "mine" = every role my skills cover; or narrow to one skill / everything
+  const [service, setService] = React.useState<"mine" | "all" | Skill>("mine");
+  const serviceMatch = (i: Item) => service === "all" || (service === "mine" ? i.eligible : skillForRole(i.role) === service);
   const [role, setRole] = React.useState<"all" | "lead" | "second">("all");
   const [month, setMonth] = React.useState("all");
   const [maxMiles, setMaxMiles] = React.useState("any");
@@ -44,7 +47,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
   const [success, setSuccess] = React.useState<{ item: Item; status: string; weddingId: string } | null>(null);
 
   const bucket = (i: Item): Tab => i.view_status === "available" ? "available" : i.view_status === "offered" ? "offered" : i.view_status === "pending" ? "pending" : i.view_status === "accepted" ? "accepted" : i.view_status === "declined" ? "declined" : "closed";
-  const counts = items.filter((i) => service === "all" || i.role.endsWith(service) || i.view_status === "offered")
+  const counts = items.filter((i) => serviceMatch(i) || i.view_status === "offered")
     .reduce((acc, i) => { acc[bucket(i)]++; return acc; }, { offered: 0, available: 0, pending: 0, accepted: 0, closed: 0, declined: 0 } as Record<Tab, number>);
   const miles = (i: Item) => i.distance?.miles ?? null;
   const months = [...new Set(items.map((i) => i.wedding_date.slice(0, 7)))].sort();
@@ -53,7 +56,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
 
   const filtered = items
     .filter((i) => bucket(i) === tab)
-    .filter((i) => service === "all" || i.role.endsWith(service) || tab === "offered")
+    .filter((i) => serviceMatch(i) || tab === "offered")
     .filter((i) => role === "all" || i.role.startsWith(role))
     .filter((i) => month === "all" || i.wedding_date.startsWith(month))
     .filter((i) => city === "all" || `${i.city}, ${i.state}` === city)
@@ -62,8 +65,8 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
     .filter((i) => !q || `${i.couple} ${i.venue_name} ${i.city}`.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => sort === "pay" ? b.compensation - a.compensation : sort === "distance" ? (miles(a) ?? 1e9) - (miles(b) ?? 1e9) : a.wedding_date.localeCompare(b.wedding_date));
 
-  const activeFilters = [service !== discipline, role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
-  const reset = () => { setService(discipline); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
+  const activeFilters = [service !== "mine", role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
+  const reset = () => { setService("mine"); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
 
   // The team standards must be accepted before signing for any wedding.
   const startSign = (i: Item) => {
@@ -115,7 +118,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
 
       {showFilters && (
         <div className="card mb-5 grid gap-4 p-5 animate-pop-in sm:grid-cols-2 lg:grid-cols-6">
-          <Field label="Service"><Select value={service} onChange={(e) => setService(e.target.value as typeof service)}><option value="all">All services</option><option value="photo">Photography</option><option value="video">Videography</option></Select></Field>
+          <Field label="Service"><Select value={service} onChange={(e) => setService(e.target.value as typeof service)}><option value="mine">Jobs for my skills</option><option value="all">All jobs</option>{SKILLS.map((s) => <option key={s.value} value={s.value}>{s.label}{skills.includes(s.value) ? "" : " (not on your profile)"}</option>)}</Select></Field>
           <Field label="Role"><Select value={role} onChange={(e) => setRole(e.target.value as typeof role)}><option value="all">Lead & second</option><option value="lead">Lead only</option><option value="second">Second only</option></Select></Field>
           <Field label="Date"><Select value={month} onChange={(e) => setMonth(e.target.value)}><option value="all">Any month</option>{months.map((m) => <option key={m} value={m}>{fmtDate(m + "-01", "MMMM yyyy")}</option>)}</Select></Field>
           <Field label="Location"><Select value={city} onChange={(e) => setCity(e.target.value)}><option value="all">All locations</option>{cities.map((c) => <option key={c}>{c}</option>)}</Select></Field>
@@ -129,7 +132,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
         <div className="card">
           <EmptyState icon={tab === "available" ? Sparkles : CalendarDays}
             title={tab === "available" ? "No open weddings match" : `No ${tab === "closed" ? "expired or filled" : tab} weddings`}
-            description={activeFilters || q ? "Try widening your filters." : tab === "available" ? "We'll notify you as soon as a new wedding needs your discipline." : undefined}
+            description={activeFilters || q ? "Try widening your filters." : tab === "available" ? "We'll notify you as soon as a new wedding needs one of your skills." : undefined}
             action={activeFilters || q ? <Button variant="outline" onClick={reset}>Clear filters</Button> : undefined} />
         </div>
       ) : (
@@ -225,7 +228,8 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
 }
 
 function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithdraw, pending }: { item: Item; onView: () => void; onAccept: () => void; onDecline: () => void; onUndo: () => void; onWithdraw: () => void; pending: boolean }) {
-  const isPhoto = i.role.endsWith("photo");
+  const skill = skillForRole(i.role);
+  const SkillIcon = skill === "photo" ? Camera : skill === "video" ? Video : Smartphone;
   const closingSoon = i.view_status === "available" && i.expires_at && new Date(i.expires_at).getTime() - Date.now() < 7 * 86400000;
   const open = i.view_status === "available" || i.view_status === "offered";
   const muted = ["expired", "filled", "declined"].includes(i.view_status);
@@ -244,7 +248,7 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
           </div>
           <p className="mt-0.5 truncate text-[13px] text-muted">{i.venue_name}</p>
           <div className="mt-2 flex flex-wrap gap-1.5">
-            <Badge tone={isPhoto ? "blush" : "info"}>{isPhoto ? <Camera className="size-3" /> : <Video className="size-3" />}{ROLE_LABEL[i.role]}</Badge>
+            <Badge tone={skill === "photo" ? "blush" : skill === "video" ? "info" : "warning"}><SkillIcon className="size-3" />{ROLE_LABEL[i.role]}</Badge>
             {closingSoon && <Badge tone="warning"><Timer className="size-3" />Closes {ago(i.expires_at!)}</Badge>}
             {open && (i.distance?.miles ?? 0) > LONG_DISTANCE_MILES && <Badge><Route className="size-3" />Long-distance</Badge>}
           </div>
@@ -261,7 +265,7 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
         <ul className="mt-2 flex flex-wrap gap-1.5">{i.requirements.map((r) => <li key={r} className="rounded-lg bg-midnight-50 px-2 py-1 text-[12px] text-midnight-600">{r}</li>)}</ul>
         {open && i.conflict && <p className="mt-3 flex items-center gap-1.5 text-[12px] font-medium text-danger-500"><AlertTriangle className="size-3.5" />You&apos;re already booked this day</p>}
         {open && !i.conflict && i.calendar && i.calendar !== "available" && <p className="mt-3 flex items-center gap-1.5 text-[12px] font-medium text-warning-700"><AlertTriangle className="size-3.5" />Marked {i.calendar} on your calendar</p>}
-        {!i.eligible && i.view_status === "available" && <p className="mt-3 text-[12px] text-muted">Open to {i.role.endsWith("photo") ? "photographers" : "videographers"} only.</p>}
+        {!i.eligible && i.view_status === "available" && <p className="mt-3 text-[12px] text-muted">Open to {skillPerson(skill).toLowerCase()}s — add it to the skills on your <Link href="/team/profile" className="underline">profile</Link> to request it.</p>}
       </div>
       <div className="flex gap-2 px-5 pb-5">
         {open && (

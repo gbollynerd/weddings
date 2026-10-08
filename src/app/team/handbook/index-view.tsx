@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { skillPerson } from "@/lib/skills";
 import Link from "next/link";
 import { Search, BookOpen, Clock, ArrowRight, Siren } from "lucide-react";
 import { Card, Input, Badge, EmptyState } from "@/components/ui";
@@ -9,10 +10,10 @@ import { cn } from "@/lib/utils";
 
 type Tree = { id: string; slug: string; title: string; description: string; icon: string; articles: { slug: string; title: string; summary: string; audience: string; read_minutes: number; updated_at: string }[] }[];
 
-export function HandbookIndex({ tree, discipline }: { tree: Tree; discipline: "photo" | "video" }) {
+export function HandbookIndex({ tree, skills }: { tree: Tree; skills: string[] }) {
   const [q, setQ] = React.useState("");
   const [aud, setAud] = React.useState<"mine" | "all">("mine");
-  const show = (a: Tree[number]["articles"][number]) => aud === "all" || a.audience === "all" || a.audience === discipline;
+  const show = (a: Tree[number]["articles"][number]) => aud === "all" || a.audience === "all" || skills.includes(a.audience);
   const matches = q.trim().length > 1 ? tree.flatMap((c) => c.articles.filter((a) => show(a) && `${a.title} ${a.summary}`.toLowerCase().includes(q.toLowerCase())).map((a) => ({ ...a, cat: c.title }))) : null;
   const recent = tree.flatMap((c) => c.articles.filter(show).map((a) => ({ ...a, cat: c.title }))).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 4);
   const total = tree.reduce((s, c) => s + c.articles.filter(show).length, 0);
@@ -32,7 +33,7 @@ export function HandbookIndex({ tree, discipline }: { tree: Tree; discipline: "p
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs value={aud} onChange={setAud} items={[{ value: "mine", label: discipline === "photo" ? "For photographers" : "For videographers" }, { value: "all", label: "All articles" }]} />
+        <Tabs value={aud} onChange={setAud} items={[{ value: "mine", label: skills.length === 1 ? `For ${skillPerson(skills[0]).toLowerCase()}s` : "For your skills" }, { value: "all", label: "All articles" }]} />
         <Link href="/team/handbook/emergencies" className="inline-flex items-center gap-2 rounded-full bg-danger-50 px-4 py-2 text-sm font-medium text-danger-700 hover:bg-danger-50/70"><Siren className="size-4" />Emergency procedures</Link>
       </div>
 

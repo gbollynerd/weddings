@@ -3,6 +3,7 @@ import { sql } from "@/lib/db";
 import { storage, storageKey } from "@/lib/storage";
 import { safeName, dropboxConfig } from "@/lib/dropbox";
 import { notify } from "./notifications";
+import { skillForRole, skillPerson } from "@/lib/skills";
 import { momentLabel, isMoment, isSource, isAudioSource, SOURCE_LABEL, BEAT_LABEL, MARKER_BEATS, MOMENTS } from "@/content/footage";
 
 export async function uploadableWeddings(memberId: string) {
@@ -16,7 +17,7 @@ export async function uploadableWeddings(memberId: string) {
     order by w.wedding_date desc`;
 }
 
-export async function listUploads(userId: string, kind: "photo" | "video", weddingId?: string) {
+export async function listUploads(userId: string, kind: "photo" | "video" | "content", weddingId?: string) {
   // Video "processing" finishes ~2 minutes after upload in the demo pipeline.
   await sql`update uploads set status = 'ready' where uploader_id = ${userId} and status = 'processing' and created_at < now() - interval '2 minutes'`;
   return sql`select u.id, u.wedding_id, u.category, u.moment, u.source, u.camera_markers, u.filename, u.size_bytes, u.status, u.error, u.duration_seconds, u.created_at, w.couple,
@@ -27,12 +28,13 @@ export async function listUploads(userId: string, kind: "photo" | "video", weddi
 }
 
 export type BeginInput = {
-  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string;
+  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "content" | "document"; category: string;
   filename: string; size: number; mime: string; retryOf?: string | null;
   moment?: string | null; source?: string | null; cameraMarkers?: boolean;
 };
 
 const PHOTO_CATEGORY: Record<string, string> = { raw: "RAW", edited: "Edited", highlights: "Highlights" };
+const CONTENT_CATEGORY: Record<string, string> = { raw: "Raw clips & photos", finished: "Finished reels" };
 
 /**
  * Readable folder layout used when files live in Dropbox, e.g.
@@ -40,7 +42,7 @@ const PHOTO_CATEGORY: Record<string, string> = { raw: "RAW", edited: "Edited", h
  *   /Weddings/2026-10-10 Ade & Tolu [3f2a9c1b]/Photo/RAW/Whole day - mixed/Marcus Johnson · Main body/A_0001.CR3
  */
 export function readablePath(root: string, p: {
-  kind: "photo" | "video" | "document"; category: string; filename: string; uploader: string;
+  kind: "photo" | "video" | "content" | "document"; category: string; filename: string; uploader: string;
   wedding: { id: string; date: string; couple: string } | null; moment: string | null; source: string | null;
 }) {
   const file = safeName(p.filename, 140);
@@ -51,6 +53,8 @@ export function readablePath(root: string, p: {
   const shooter = p.source ? `${who} · ${safeName(SOURCE_LABEL[p.source] ?? p.source, 40)}` : who;
   const parts = p.kind === "photo"
     ? [root, wedding, "Photo", PHOTO_CATEGORY[p.category] ?? safeName(p.category), moment, shooter, file]
+    : p.kind === "content"
+    ? [root, wedding, "Content", CONTENT_CATEGORY[p.category] ?? safeName(p.category), moment, shooter, file]
     : [root, wedding, "Video", moment, shooter, file];
   return parts.join("/");
 }
@@ -83,18 +87,22 @@ async function keyFor(userId: string, input: Pick<BeginInput, "kind" | "category
 
 function normalizeTags(input: Pick<BeginInput, "kind" | "category" | "moment" | "source">) {
   if (input.kind === "document") return { category: input.category, moment: null, source: null };
-  const moment = input.moment && isMoment(input.moment, input.kind === "photo") ? input.moment : null;
+  const mixedOk = input.kind === "photo" || input.kind === "content";
+  const moment = input.moment && isMoment(input.moment, mixedOk) ? input.moment : null;
   const source = input.source && isSource(input.kind, input.source) ? input.source : null;
   if (input.kind === "video" && !moment) throw new Error("Choose which part of the day this footage covers.");
   // Video files are filed as footage or audio from their source; photos keep RAW / Edited / Highlights.
-  const category = input.kind === "video" ? (isAudioSource(source) ? "audio" : "footage") : input.category;
+  const category = input.kind === "video" ? (isAudioSource(source) ? "audio" : "footage")
+    : input.kind === "content" ? (input.category === "finished" ? "finished" : "raw") : input.category;
   return { category, moment, source };
 }
 
 export async function beginUpload(userId: string, input: BeginInput) {
   if (input.assignmentId) {
-    const [ok] = await sql`select 1 from wedding_assignments a join team_members t on t.id = a.team_member_id where a.id = ${input.assignmentId} and t.user_id = ${userId}`;
+    const [ok] = await sql`select a.role from wedding_assignments a join team_members t on t.id = a.team_member_id where a.id = ${input.assignmentId} and t.user_id = ${userId}`;
     if (!ok) throw new Error("You're not assigned to this wedding.");
+    // What you upload follows your role on this wedding (photographer → photos, content creator → content…)
+    if (input.kind !== "document" && input.kind !== skillForRole(ok.role)) throw new Error(`You're the ${skillPerson(skillForRole(ok.role)).toLowerCase()} on this wedding — upload into that section.`);
   }
   const tags = normalizeTags(input);
   const provider = storage();
@@ -135,7 +143,7 @@ export async function batchSummary(userId: string, weddingId: string | null, okC
   if (!weddingId || okCount + failCount === 0) return;
   const [w] = await sql`select couple from weddings where id = ${weddingId}`;
   await notify(userId, "upload", failCount ? "Upload finished with errors" : "Upload completed",
-    `${okCount} ${kind} file${okCount === 1 ? "" : "s"} uploaded for ${w?.couple ?? "your wedding"}${failCount ? `, ${failCount} failed` : ""}.`, kind === "video" ? "/team/uploads/video" : "/team/uploads");
+    `${okCount} ${kind} file${okCount === 1 ? "" : "s"} uploaded for ${w?.couple ?? "your wedding"}${failCount ? `, ${failCount} failed` : ""}.`, `/team/uploads?wedding=${weddingId}`);
 }
 
 export async function deleteUpload(userId: string, id: string) {
@@ -176,7 +184,7 @@ export async function retagUpload(user: { id: string; role: string }, id: string
 export async function addMarker(user: { id: string; role: string }, uploadId: string, input: { at: number; beat: string; note?: string | null }) {
   const u = await editableUpload(user, uploadId);
   if (!u) return { ok: false as const, message: "Upload not found." };
-  if (u.kind !== "video") return { ok: false as const, message: "Markers are for video and audio files." };
+  if (u.kind !== "video" && u.kind !== "content") return { ok: false as const, message: "Markers are for video, audio and content clips." };
   if (!Number.isInteger(input.at) || input.at < 0) return { ok: false as const, message: "Enter a time like 12:31 or 1:02:45." };
   if (u.duration_seconds && input.at > u.duration_seconds) return { ok: false as const, message: `This clip is only ${Math.floor(u.duration_seconds / 60)}m ${u.duration_seconds % 60}s long.` };
   if (![...MARKER_BEATS, ...MOMENTS].some((b) => b.value === input.beat)) return { ok: false as const, message: "Choose what happens at this point." };
@@ -196,7 +204,7 @@ export async function deleteMarker(user: { id: string; role: string }, markerId:
 /* ───────────── Coordinator view ───────────── */
 
 export type FootageRow = {
-  id: string; kind: "photo" | "video"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
+  id: string; kind: "photo" | "video" | "content"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
   size_bytes: number; status: string; duration_seconds: number | null; created_at: Date; uploader: string; storage_provider: string | null;
   markers: { id: string; at: number; beat: string; note: string | null }[];
 };
@@ -207,7 +215,7 @@ export async function footageForWedding(weddingId: string) {
       us.full_name as uploader, u.storage_provider,
       coalesce((select json_agg(json_build_object('id', k.id, 'at', k.at_seconds, 'beat', k.beat, 'note', k.note) order by k.at_seconds) from upload_markers k where k.upload_id = u.id), '[]') as markers
     from uploads u join users us on us.id = u.uploader_id
-    where u.wedding_id = ${weddingId} and u.kind in ('photo','video') and u.status <> 'failed'
+    where u.wedding_id = ${weddingId} and u.kind in ('photo','video','content') and u.status <> 'failed'
     order by u.created_at`;
 }
 

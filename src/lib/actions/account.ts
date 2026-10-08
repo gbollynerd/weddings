@@ -75,7 +75,7 @@ export async function revokeSessionAction(id: string | "others"): Promise<Action
  * details are collected by the payout provider (e.g. Stripe Connect) and never touch our database.
  */
 export async function updatePayoutAction(input: { method: string; holder: string; routing: string; account: string }): Promise<ActionResult> {
-  const u = await requireUser(["photographer", "videographer"]);
+  const u = await requireUser(["freelancer"]);
   const fe: Record<string, string> = {};
   if (!["Direct deposit", "PayPal", "Check"].includes(input.method)) fe.method = "Choose a method";
   if (input.method === "Direct deposit") {

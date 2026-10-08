@@ -1,12 +1,13 @@
 /** Fill contract placeholders. Pure — used on the server when signing and in the coordinator's preview. */
 import { ROLE_LABEL, money } from "@/lib/pricing";
 import { fmtLong, fmtTime } from "@/lib/utils";
+import { skillPerson, type Skill } from "@/lib/skills";
 import { MILEAGE_FREE_MILES, MILEAGE_RATE, mileagePay } from "@/lib/geo";
 
 export const COMPANY = "Visual Weddings";
 
 export type ContractContext = {
-  contractor_name: string; contractor_email: string; discipline: "photo" | "video";
+  contractor_name: string; contractor_email: string; discipline: Skill;
   role: string; couple: string; wedding_date: string; venue: string; city: string; call_time: string | null; coverage_hours: number; compensation: number; miles: number | null;
 };
 
@@ -23,7 +24,7 @@ export function fillTemplate(text: string, c: ContractContext) {
   const values: Record<string, string> = {
     company: COMPANY,
     contractor_name: c.contractor_name, contractor_email: c.contractor_email,
-    discipline: c.discipline === "photo" ? "photographer" : "videographer",
+    discipline: skillPerson(c.discipline).toLowerCase(),
     role: ROLE_LABEL[c.role] ?? c.role, couple: c.couple, wedding_date: fmtLong(c.wedding_date), venue: c.venue, city: c.city,
     call_time: c.call_time ? fmtTime(c.call_time) : "to be confirmed", coverage_hours: String(c.coverage_hours), compensation: money(c.compensation),
     mileage: mileageText(c.miles),

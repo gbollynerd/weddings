@@ -1,5 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
+import { skillsLine } from "@/lib/skills";
 import { z } from "zod";
 import { sql } from "@/lib/db";
 import { createSession, destroySession, verifyPassword, hashPassword, SUSPENDED_MESSAGE } from "@/lib/auth";
@@ -77,13 +78,13 @@ export async function logoutAction() {
   redirect("/login");
 }
 
-/* ───────────── Photographer / videographer applications ───────────── */
+/* ───────────── Freelancer applications (photo / video / content) ───────────── */
 const ApplySchema = z.object({
   fullName: z.string().trim().min(3, "Enter your full name").max(80),
   email: z.string().trim().email("Enter a valid email"),
   phone: z.string().trim().min(7, "Enter a phone number").max(30),
   password: z.string().min(8, "Use at least 8 characters"),
-  discipline: z.enum(["photo", "video"], { message: "Choose photography or videography" }),
+  skills: z.array(z.enum(["photo", "video", "content"])).min(1, "Choose at least one").max(3),
   homeAddress: z.string().trim().min(6, "Enter your home base address").max(200),
   market: z.string().trim().min(2, "Choose the market you'll mostly work in"),
   years: z.coerce.number().int().min(0, "Enter 0 or more").max(60),
@@ -112,14 +113,14 @@ export async function applyToTeamAction(input: ApplyInput): Promise<ActionResult
   const at = home && home !== "unavailable" ? home : null;
   const hash = await hashPassword(d.password);
   const userId = await sql.begin(async (tx) => {
-    const [u] = await tx`insert into users (email, password_hash, role, full_name, phone) values (${d.email.toLowerCase()}, ${hash}, ${d.discipline === "photo" ? "photographer" : "videographer"}, ${d.fullName}, ${d.phone}) returning id`;
+    const [u] = await tx`insert into users (email, password_hash, role, full_name, phone) values (${d.email.toLowerCase()}, ${hash}, 'freelancer', ${d.fullName}, ${d.phone}) returning id`;
     await tx`insert into user_settings (user_id) values (${u.id})`;
-    await tx`insert into team_members (user_id, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, lat, lng, status, applied_at)
-      values (${u.id}, ${d.discipline}, ${d.about}, ${market.id}, ${d.years}, ${d.portfolio}, ${d.instagram || null}, ${d.equipment || null}, ${d.homeAddress}, ${at?.lat ?? null}, ${at?.lng ?? null}, 'applicant', now())`;
+    await tx`insert into team_members (user_id, skills, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, lat, lng, status, applied_at)
+      values (${u.id}, ${[...new Set(d.skills)]}, null, ${d.about}, ${market.id}, ${d.years}, ${d.portfolio}, ${d.instagram || null}, ${d.equipment || null}, ${d.homeAddress}, ${at?.lat ?? null}, ${at?.lng ?? null}, 'applicant', now())`;
     return u.id as string;
   });
   const staff = await sql`select id from users where role in ('coordinator','admin') and status = 'active'`;
-  for (const s of staff) await notify(s.id, "booking", `New ${d.discipline === "photo" ? "photographer" : "videographer"} application`, `${d.fullName} · ${d.years} years · ${d.portfolio}`, "/admin/people?tab=applicants");
+  for (const s of staff) await notify(s.id, "booking", `New application: ${skillsLine(d.skills).toLowerCase()}`, `${d.fullName} · ${d.years} years · ${d.portfolio}`, "/admin/people?tab=applicants");
   await createSession(userId);
   return { ok: true };
 }

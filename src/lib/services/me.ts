@@ -6,7 +6,7 @@ import { getMember } from "./team";
 
 /** Current team member (photographer/videographer) for server components. */
 export const currentMember = cache(async () => {
-  const user = await requireUser(["photographer", "videographer"]);
+  const user = await requireUser(["freelancer"]);
   const member = await getMember(user.id);
   if (!member) redirect("/login");
   return { user, member };

@@ -34,8 +34,7 @@ async function main() {
   // ── Roles
   const roles = [
     ["client", "Client", ["booking:create", "wedding:view_own", "payment:make", "message:send", "deliverable:view"]],
-    ["photographer", "Photographer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send"]],
-    ["videographer", "Videographer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send"]],
+    ["freelancer", "Freelancer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send", "profile:edit"]],
     ["coordinator", "Coordinator", ["wedding:manage", "team:assign", "booking:manage", "license:review", "message:send", "handbook:edit"]],
     ["admin", "Administrator", ["*"]],
   ] as const;
@@ -84,38 +83,39 @@ async function main() {
   const coordinator = await user("grace@visualweddings.test", "coordinator", "Grace Thompson", "(704) 555-0142", AVATAR.w2);
   const admin = await user("admin@visualweddings.test", "admin", "Alex Rivera", "(704) 555-0100");
 
-  type TM = { email: string; name: string; disc: "photo" | "video"; market: string; avatar?: string; years: number; specialties: string[]; bio: string; langs?: string[]; rating: number };
+  type TM = { email: string; name: string; skills: ("photo" | "video" | "content")[]; market: string; avatar?: string; years: number; specialties: string[]; bio: string; langs?: string[]; rating: number };
   const team: TM[] = [
-    { email: "marcus@visualweddings.test", name: "Marcus Johnson", disc: "photo", market: "charlotte-nc", avatar: AVATAR.m2, years: 8, rating: 4.9,
+    { email: "marcus@visualweddings.test", name: "Marcus Johnson", skills: ["photo", "content"], market: "charlotte-nc", avatar: AVATAR.m2, years: 8, rating: 4.9,
       specialties: ["Documentary", "Golden-hour portraits", "Large receptions"], langs: ["English", "Spanish"],
       bio: "Documentary-first wedding photographer based in Charlotte. I love quiet in-between moments and big, joyful dance floors." },
-    { email: "daniel@visualweddings.test", name: "Daniel Williams", disc: "video", market: "raleigh-durham-nc", avatar: AVATAR.m1, years: 6, rating: 4.8,
+    { email: "daniel@visualweddings.test", name: "Daniel Williams", skills: ["video"], market: "raleigh-durham-nc", avatar: AVATAR.m1, years: 6, rating: 4.8,
       specialties: ["Cinematic films", "Drone (Part 107)", "Audio"], bio: "Filmmaker focused on clean audio and honest storytelling. FAA Part 107 certified." },
-    { email: "michael@visualweddings.test", name: "Michael Carter", disc: "photo", market: "greensboro-nc", avatar: AVATAR.m3, years: 11, rating: 4.9,
+    { email: "michael@visualweddings.test", name: "Michael Carter", skills: ["photo"], market: "greensboro-nc", avatar: AVATAR.m3, years: 11, rating: 4.9,
       specialties: ["Classic portraits", "Family formals", "Church ceremonies"], bio: "Eleven seasons and counting. Calm, organised and great with big families." },
-    { email: "aisha@visualweddings.test", name: "Aisha Bello", disc: "photo", market: "atlanta-ga", avatar: AVATAR.w3, years: 7, rating: 5.0,
+    { email: "aisha@visualweddings.test", name: "Aisha Bello", skills: ["photo"], market: "atlanta-ga", avatar: AVATAR.w3, years: 7, rating: 5.0,
       specialties: ["Editorial", "Cultural ceremonies", "Flash at night"], langs: ["English", "Yoruba"], bio: "Editorial eye, warm heart. Specialist in multi-day and cultural celebrations." },
-    { email: "priya@visualweddings.test", name: "Priya Nair", disc: "video", market: "charlotte-nc", avatar: AVATAR.w1, years: 5, rating: 4.8,
+    { email: "priya@visualweddings.test", name: "Priya Nair", skills: ["video"], market: "charlotte-nc", avatar: AVATAR.w1, years: 5, rating: 4.8,
       specialties: ["Highlight films", "Social teasers"], langs: ["English", "Hindi"], bio: "I cut films that feel like your favourite song." },
-    { email: "jordan@visualweddings.test", name: "Jordan Lee", disc: "photo", market: "raleigh-durham-nc", years: 4, rating: 4.7, specialties: ["Candid", "Outdoor"], bio: "Candid storyteller who loves barn and garden weddings." },
-    { email: "sofia@visualweddings.test", name: "Sofia Martinez", disc: "photo", market: "charlotte-nc", years: 3, rating: 4.8, specialties: ["Second shooting", "Details"], langs: ["English", "Spanish"], bio: "Detail-obsessed second shooter and rising lead." },
-    { email: "kwame@visualweddings.test", name: "Kwame Mensah", disc: "video", market: "atlanta-ga", years: 9, rating: 4.9, specialties: ["Feature films", "Multi-cam ceremonies"], bio: "Documentary filmmaker; multi-camera ceremony specialist." },
-    { email: "elena@visualweddings.test", name: "Elena Rossi", disc: "photo", market: "washington-dc", years: 10, rating: 4.9, specialties: ["Black tie", "Architecture"], langs: ["English", "Italian"], bio: "Fine-art approach for formal city weddings." },
-    { email: "tyler@visualweddings.test", name: "Tyler Brooks", disc: "video", market: "greensboro-nc", years: 3, rating: 4.6, specialties: ["Gimbal work", "Reels"], bio: "Energetic shooter for dance-floor heavy weddings." },
+    { email: "jordan@visualweddings.test", name: "Jordan Lee", skills: ["photo"], market: "raleigh-durham-nc", years: 4, rating: 4.7, specialties: ["Candid", "Outdoor"], bio: "Candid storyteller who loves barn and garden weddings." },
+    { email: "sofia@visualweddings.test", name: "Sofia Martinez", skills: ["photo"], market: "charlotte-nc", years: 3, rating: 4.8, specialties: ["Second shooting", "Details"], langs: ["English", "Spanish"], bio: "Detail-obsessed second shooter and rising lead." },
+    { email: "kwame@visualweddings.test", name: "Kwame Mensah", skills: ["video"], market: "atlanta-ga", years: 9, rating: 4.9, specialties: ["Feature films", "Multi-cam ceremonies"], bio: "Documentary filmmaker; multi-camera ceremony specialist." },
+    { email: "elena@visualweddings.test", name: "Elena Rossi", skills: ["photo"], market: "washington-dc", years: 10, rating: 4.9, specialties: ["Black tie", "Architecture"], langs: ["English", "Italian"], bio: "Fine-art approach for formal city weddings." },
+    { email: "jade@visualweddings.test", name: "Jade Thompson", skills: ["content"], market: "charlotte-nc", years: 3, rating: 4.9, specialties: ["Vertical reels", "Same-day teasers", "Behind the scenes"], bio: "Wedding content creator: phone-first reels and same-day teasers couples can post that night." },
+    { email: "tyler@visualweddings.test", name: "Tyler Brooks", skills: ["video", "content"], market: "greensboro-nc", years: 3, rating: 4.6, specialties: ["Gimbal work", "Reels"], bio: "Energetic shooter for dance-floor heavy weddings." },
   ];
   const tm: Record<string, { id: string; user: string }> = {};
   for (const t of team) {
-    const uid = await user(t.email, t.disc === "photo" ? "photographer" : "videographer", t.name, `(${700 + team.indexOf(t)}) 555-01${10 + team.indexOf(t)}`, t.avatar);
-    const [r] = await sql`insert into team_members (user_id, discipline, bio, home_market_id, service_radius, specialties, years_experience, languages, portfolio_url, instagram, website, rating, payout_last4)
-      values (${uid}, ${t.disc}, ${t.bio}, ${marketId[t.market]}, ${t.market === "charlotte-nc" ? 90 : 60}, ${t.specialties}, ${t.years}, ${t.langs ?? ["English"]},
+    const uid = await user(t.email, "freelancer", t.name, `(${700 + team.indexOf(t)}) 555-01${10 + team.indexOf(t)}`, t.avatar);
+    const [r] = await sql`insert into team_members (user_id, skills, discipline, bio, home_market_id, service_radius, specialties, years_experience, languages, portfolio_url, instagram, website, rating, payout_last4)
+      values (${uid}, ${t.skills}, ${t.skills.find((x) => x !== "content") ?? null}, ${t.bio}, ${marketId[t.market]}, ${t.market === "charlotte-nc" ? 90 : 60}, ${t.specialties}, ${t.years}, ${t.langs ?? ["English"]},
               ${"https://portfolio.example.com/" + t.email.split("@")[0]}, ${"@" + t.email.split("@")[0] + ".films"}, null, ${t.rating}, ${String(4000 + team.indexOf(t) * 137).slice(-4)}) returning id`;
     tm[t.email.split("@")[0]] = { id: r.id, user: uid };
   }
   // A photographer who applied through /join and is waiting for review
   {
-    const uid = await user("nina@visualweddings.test", "photographer", "Nina Okafor", "(704) 555-0188");
-    await sql`insert into team_members (user_id, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, status, applied_at, specialties)
-      values (${uid}, 'photo', ${"Documentary wedding photographer — 40+ weddings as a second shooter and 12 as a lead. I love candid family moments and dance floors."},
+    const uid = await user("nina@visualweddings.test", "freelancer", "Nina Okafor", "(704) 555-0188");
+    await sql`insert into team_members (user_id, skills, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, status, applied_at, specialties)
+      values (${uid}, ${["photo", "content"]}, 'photo', ${"Documentary wedding photographer — 40+ weddings as a second shooter and 12 as a lead. I love candid family moments and dance floors."},
               ${marketId["charlotte-nc"]}, 4, 'https://portfolio.example.com/nina', '@nina.okafor.photo', 'Canon R6 II ×2, 24-70 f/2.8, 70-200 f/2.8, 35 f/1.4, Godox flashes',
               '1200 East Blvd, Charlotte, NC 28203', 'applicant', now() - interval '2 days', ${["Documentary", "Candid"]})`;
   }
@@ -127,10 +127,11 @@ async function main() {
     slots: { role: string; who?: string; status: string; expiresIn?: number; miles?: number; req?: string[]; notes?: string }[];
   };
   const W_: W[] = [
-    { key: "sarah", couple: ["Sarah Mitchell", "James Porter"], email: "sarah@visualweddings.test", offset: 15, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-signature", addons: ["additional-hour"], guests: 160, type: "Garden ceremony & reception", start: "14:00",
-      slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }] },
-    { key: "olivia", couple: ["Olivia Grant", "Marcus Reed"], email: "olivia@example.test", offset: 29, market: "raleigh-durham-nc", venue: "Magnolia Barn", pkg: "duo-signature", guests: 190, type: "Rustic barn", start: "15:00",
-      slots: [{ role: "lead_photo", who: "jordan", status: "accepted" }, { role: "lead_video", who: "daniel", status: "accepted" }, { role: "second_photo", status: "open", expiresIn: 12, miles: 158, req: ["2+ seasons second shooting", "Two bodies, dual slots"], notes: "Barn venue — bring flash for the reception." }] },
+    { key: "sarah", couple: ["Sarah Mitchell", "James Porter"], email: "sarah@visualweddings.test", offset: 15, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-signature", addons: ["additional-hour", "content-creator"], guests: 160, type: "Garden ceremony & reception", start: "14:00",
+      slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }, { role: "lead_content", who: "jade", status: "accepted", req: ["Recent phone that shoots 4K", "Gimbal or stabiliser", "Black attire"] }] },
+    { key: "olivia", couple: ["Olivia Grant", "Marcus Reed"], email: "olivia@example.test", offset: 29, market: "raleigh-durham-nc", venue: "Magnolia Barn", pkg: "duo-signature", addons: ["content-creator"], guests: 190, type: "Rustic barn", start: "15:00",
+      slots: [{ role: "lead_photo", who: "jordan", status: "accepted" }, { role: "lead_video", who: "daniel", status: "accepted" },
+        { role: "lead_content", status: "open", expiresIn: 14, req: ["Recent phone that shoots 4K", "Gimbal or stabiliser", "Social-first portfolio", "Black attire"], notes: "Couple wants a same-day teaser for their reception slideshow." }, { role: "second_photo", status: "open", expiresIn: 12, miles: 158, req: ["2+ seasons second shooting", "Two bodies, dual slots"], notes: "Barn venue — bring flash for the reception." }] },
     { key: "emily", couple: ["Emily Chen", "David Okafor"], email: "emily@example.test", offset: 36, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-legacy", addons: ["drone-coverage"], guests: 240, type: "Black-tie ballroom", start: "16:00",
       slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }, { role: "lead_video", who: "priya", status: "accepted" }, { role: "second_video", who: "daniel", status: "accepted", miles: 310 }] },
     { key: "hannah", couple: ["Hannah Brooks", "Christopher Lane"], email: "hannah@example.test", offset: 21, market: "greensboro-nc", venue: "Sycamore Grove", pkg: "photo-signature", guests: 130, type: "Garden", start: "15:30",
@@ -154,8 +155,8 @@ async function main() {
     { key: "brianna", couple: ["Brianna Hall", "Cole Ramirez"], email: "brianna@example.test", offset: 84, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-essentials", status: "cancelled", guests: 90, type: "Garden",
       slots: [{ role: "lead_photo", who: "marcus", status: "cancelled" }] },
     // Completed
-    { key: "rachel", couple: ["Rachel Kim", "Benjamin Ross"], email: "rachel@example.test", offset: -6, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-signature", status: "completed", guests: 200, type: "Ballroom", start: "15:00",
-      slots: [{ role: "lead_photo", who: "marcus", status: "completed" }, { role: "second_photo", who: "sofia", status: "completed" }, { role: "lead_video", who: "daniel", status: "completed" }] },
+    { key: "rachel", couple: ["Rachel Kim", "Benjamin Ross"], email: "rachel@example.test", offset: -6, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-signature", addons: ["content-creator"], status: "completed", guests: 200, type: "Ballroom", start: "15:00",
+      slots: [{ role: "lead_photo", who: "marcus", status: "completed" }, { role: "second_photo", who: "sofia", status: "completed" }, { role: "lead_video", who: "daniel", status: "completed" }, { role: "lead_content", who: "jade", status: "completed" }] },
     { key: "lauren", couple: ["Lauren Hayes", "Joshua Bell"], email: "lauren@example.test", offset: -20, market: "raleigh-durham-nc", venue: "Heritage Tobacco Warehouse", pkg: "duo-signature", status: "completed", guests: 230, type: "Industrial",
       slots: [{ role: "lead_photo", who: "jordan", status: "completed" }, { role: "second_photo", who: "marcus", status: "completed", miles: 170 }, { role: "lead_video", who: "daniel", status: "completed" }] },
     { key: "megan", couple: ["Megan Ward", "Andrew Kim"], email: "megan@example.test", offset: -34, market: "charlotte-nc", venue: "Lakeview Pavilion", pkg: "photo-heirloom", status: "completed", guests: 150, type: "Lakeside",

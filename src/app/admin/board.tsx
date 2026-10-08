@@ -1,5 +1,6 @@
 "use client";
 import * as React from "react";
+import { skillsLine } from "@/lib/skills";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, XCircle, FileText, Star, Camera, Video } from "lucide-react";
@@ -146,7 +147,7 @@ export function AdminBoard({ bookings, licenses, requests, payouts, open, team, 
           {team.map((t) => (
             <Card key={t.full_name as string} className="flex items-center gap-3 p-4">
               <Avatar name={t.full_name as string} src={t.avatar_url as string | null} size={44} />
-              <div className="min-w-0 flex-1"><p className="truncate font-medium text-ink">{t.full_name}</p><p className="text-[12px] text-muted">{t.discipline === "photo" ? "Photographer" : "Videographer"} · {t.city}</p></div>
+              <div className="min-w-0 flex-1"><p className="truncate font-medium text-ink">{t.full_name}</p><p className="text-[12px] text-muted">{skillsLine(t.skills as string[])} · {t.city}</p></div>
               <div className="text-right text-[12px]"><p className="flex items-center gap-1 text-ink"><Star className="size-3 fill-blush-400 text-blush-400" />{Number(t.rating).toFixed(1)}</p><p className="text-muted">{t.upcoming} upcoming</p></div>
             </Card>
           ))}

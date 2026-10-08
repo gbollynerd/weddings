@@ -3,10 +3,11 @@ import { requireUser } from "@/lib/auth";
 import { getMember, opportunities, licenses, REQUIRED_DOCS } from "@/lib/services/team";
 import { standardsAcceptance } from "@/lib/services/standards";
 import { listNotifications, unreadCounts } from "@/lib/services/notifications";
+import { skillsLine } from "@/lib/skills";
 import { AppShell, type NavGroup } from "@/components/shell/app-shell";
 
 export default async function TeamLayout({ children }: { children: React.ReactNode }) {
-  const user = await requireUser(["photographer", "videographer"], "/team");
+  const user = await requireUser(["freelancer"], "/team");
   const member = await getMember(user.id);
   if (!member) redirect("/login");
   const active = member.status === "active";
@@ -17,7 +18,6 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
     const docs = lic.filter((l) => l.doc_type === d.type);
     return !docs.some((l) => ["verified", "pending_review"].includes(l.effective as string));
   }).length + lic.filter((l) => l.effective === "expiring_soon").length;
-  const isVideo = member.discipline === "video";
 
   const nav: NavGroup[] = !active ? [
     { items: [{ href: "/team", label: "Application", icon: "ClipboardList" }] },
@@ -36,7 +36,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
       { href: "/team/open", label: "Open Weddings", icon: "Sparkles", badge: openCount },
       { href: "/team/availability", label: "Availability", icon: "CalendarDays" },
       { href: "/team/messages", label: "Messages", icon: "MessageCircle", badge: counts.messages },
-      { href: isVideo ? "/team/uploads/video" : "/team/uploads", label: isVideo ? "Video Uploads" : "Photo Uploads", icon: isVideo ? "Film" : "Images", match: ["/team/uploads"] },
+      { href: "/team/uploads", label: "Uploads", icon: "UploadCloud", match: ["/team/uploads"] },
       { href: "/team/payments", label: "Payments", icon: "Wallet" },
     ] },
     { title: "Resources", items: [
@@ -50,7 +50,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
   ];
   return (
     <AppShell nav={nav} base="/team" oncall settingsHref="/team/settings" profileHref="/team/profile"
-      user={{ name: member.full_name, email: member.email, avatar: member.avatar_url, roleLabel: `${isVideo ? "Videographer" : "Photographer"}${active ? "" : member.status === "rejected" ? " · not approved" : " · applicant"}` }}
+      user={{ name: member.full_name, email: member.email, avatar: member.avatar_url, roleLabel: `${skillsLine(member.skills)}${active ? "" : member.status === "rejected" ? " · not approved" : " · applicant"}` }}
       notifications={notes.map((n) => ({ ...n, created_at: String(n.created_at), read_at: n.read_at ? String(n.read_at) : null })) as never}
       unread={counts.notifications}>
       {children}

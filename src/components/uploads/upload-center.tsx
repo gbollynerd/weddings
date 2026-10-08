@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
-  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause, Tag, Bookmark, Mic,
+  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause, Tag, Bookmark, Mic, Smartphone,
 } from "lucide-react";
 import { Button, Card, CardHeader, CardBody, StatusBadge, EmptyState, Progress, Alert, Badge, Select, Field, Checkbox } from "@/components/ui";
 import { Tabs, useToast, useAction } from "@/components/ui/interactive";
@@ -24,29 +24,50 @@ type FileRow = {
 type Tags = { moment: string; source: string; cameraMarkers: boolean };
 type QueueItem = { key: string; file: File; pct: number; status: "queued" | "uploading" | "done" | "failed"; error?: string; id?: string; category: string; weddingId: string; retryOf?: string } & Tags;
 
-/** Photos keep RAW / Edited / Highlights folders; video files are filed by moment and camera instead. */
-const PHOTO_CATS = [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }] as const;
 const LEGACY_VIDEO_CATS: Record<string, string> = { footage: "Footage", audio: "Audio", ceremony: "Ceremony", reception: "Reception" };
-const ACCEPT = {
-  photo: ".cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2,.jpg,.jpeg,.png,.tif,.tiff,.heic,.zip",
-  video: "video/*,.mp4,.mov,.mxf,.braw,.r3d,.wav,.mp3,.zip",
+const GB = 1024 ** 3;
+/**
+ * What each kind of upload looks like. The kind comes from the person's role on the selected wedding
+ * (photographer → photo, videographer → video, content creator → content), so one Uploads page serves everyone.
+ */
+const KIND: Record<Kind, {
+  title: string; folder: string; noun: string; cats: { value: string; label: string }[] | null; mixed: boolean; timed: boolean;
+  sourceLabel: string; maxBytes: number; maxText: string; accept: string; hint: string;
+}> = {
+  photo: {
+    title: "Photography", folder: "Photo", noun: "photos", cats: [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }],
+    mixed: true, timed: false, sourceLabel: "Camera body", maxBytes: 0.2 * GB, maxText: "Photo files are limited to 200 MB each.",
+    accept: ".cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2,.jpg,.jpeg,.png,.tif,.tiff,.heic,.zip", hint: "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each",
+  },
+  video: {
+    title: "Videography", folder: "Video", noun: "video files", cats: null,
+    mixed: false, timed: true, sourceLabel: "Camera / recorder", maxBytes: 100 * GB, maxText: "Video files are limited to 100 GB each.",
+    accept: "video/*,.mp4,.mov,.mxf,.braw,.r3d,.wav,.mp3,.zip", hint: "MP4, MOV, MXF, BRAW, WAV/MP3 audio · up to 100 GB each",
+  },
+  content: {
+    title: "Content", folder: "Content", noun: "clips and photos", cats: [{ value: "raw", label: "Raw clips & photos" }, { value: "finished", label: "Finished reels" }],
+    mixed: true, timed: true, sourceLabel: "Device", maxBytes: 20 * GB, maxText: "Content files are limited to 20 GB each.",
+    accept: "video/*,image/*,.mp4,.mov,.heic,.jpg,.jpeg,.png", hint: "Vertical MP4/MOV clips, phone photos and finished reels · up to 20 GB each",
+  },
 };
+export type Kind = "photo" | "video" | "content";
 const CONCURRENCY = 3;
 
-export function UploadCenter({ kind, weddings, files, selected, provider, providerLabel }: { kind: "photo" | "video"; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string; providerLabel: string }) {
+export function UploadCenter({ kind, weddings, files, selected, provider, providerLabel }: { kind: Kind; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string; providerLabel: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const toast = useToast();
   const { run } = useAction();
   const wedding = weddings.find((w) => w.id === selected) ?? null;
-  const [cat, setCat] = React.useState<string>(kind === "photo" ? "raw" : "footage");
-  // Video must say which part of the day it covers; photographers often dump a whole card, so "whole day" is allowed.
-  const [moment, setMoment] = React.useState<string>(kind === "photo" ? MIXED.value : "");
+  const cfg = KIND[kind];
+  const [cat, setCat] = React.useState<string>(cfg.cats?.[0].value ?? "footage");
+  // Video must say which part of the day it covers; photographers and creators often dump a whole card, so "whole day" is allowed.
+  const [moment, setMoment] = React.useState<string>(cfg.mixed ? MIXED.value : "");
   const [source, setSource] = React.useState<string>(SOURCES[kind][0].value);
   const [cameraMarkers, setCameraMarkers] = React.useState(false);
   const [markersFor, setMarkersFor] = React.useState<FileRow | null>(null);
   const [retagging, setRetagging] = React.useState<string | null>(null);
-  const needsMoment = kind === "video" && !moment;
+  const needsMoment = !cfg.mixed && !moment;
   const [queue, setQueue] = React.useState<QueueItem[]>([]);
   const [drag, setDrag] = React.useState(false);
   const handles = React.useRef(new Map<string, UploadHandle>());
@@ -95,8 +116,8 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
     if (needsMoment) { toast({ tone: "error", title: "Choose the moment first", body: "Pick which part of the day these clips cover, then add the files." }); return; }
     const arr = Array.from(list).filter((f) => f.size > 0);
     if (!arr.length) return;
-    const tooBig = arr.filter((f) => (kind === "photo" ? f.size > 200 * 1024 ** 2 : f.size > 100 * 1024 ** 3));
-    if (tooBig.length) toast({ tone: "error", title: `${tooBig.length} file${tooBig.length > 1 ? "s are" : " is"} too large`, body: kind === "photo" ? "Photo files are limited to 200 MB each." : "Video files are limited to 100 GB each." });
+    const tooBig = arr.filter((f) => f.size > cfg.maxBytes);
+    if (tooBig.length) toast({ tone: "error", title: `${tooBig.length} file${tooBig.length > 1 ? "s are" : " is"} too large`, body: cfg.maxText });
     const ok = arr.filter((f) => !tooBig.includes(f));
     setQueue((q) => [...q, ...ok.map((file) => ({ key: `${file.name}-${file.size}-${Math.random()}`, file, pct: 0, status: "queued" as const, category: cat, weddingId: wedding.id, moment, source, cameraMarkers }))]);
   };
@@ -107,14 +128,14 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
   const visibleFiles = files.filter((f) => !queue.some((q) => q.id === f.id && q.status !== "done"));
   const failedSaved = visibleFiles.filter((f) => f.status === "failed");
   const totalPct = queue.length ? queue.reduce((s, q) => s + (q.status === "done" ? 100 : q.pct), 0) / queue.length : 0;
-  const Icon = kind === "photo" ? ImageIcon : Film;
+  const Icon = kind === "photo" ? ImageIcon : kind === "video" ? Film : Smartphone;
+  const catLabel = (v: string) => cfg.cats?.find((c) => c.value === v)?.label ?? LEGACY_VIDEO_CATS[v] ?? v;
   const retag = async (f: FileRow, patch: { moment?: string; source?: string }) => {
     setRetagging(f.id);
     run(() => retagUploadAction(f.id, patch), { onSuccess: () => router.refresh() });
     setRetagging(null);
   };
-  const folderLabel = kind === "photo" ? PHOTO_CATS.find((c) => c.value === cat)?.label : momentLabel(moment || null);
-  const untaggedHere = kind === "video" ? visibleFiles.filter((f) => f.status !== "failed" && !f.moment).length : 0;
+  const untaggedHere = !cfg.mixed ? visibleFiles.filter((f) => f.status !== "failed" && !f.moment).length : 0;
 
   return (
     <div className="grid gap-6 xl:grid-cols-[300px_1fr]">
@@ -143,34 +164,34 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
         ) : (
           <>
             <Card>
-              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <div className="flex flex-col gap-4 p-5 sm:p-6 2xl:flex-row 2xl:items-center 2xl:justify-between">
                 <nav aria-label="Folder" className="flex flex-wrap items-center gap-1 text-sm text-muted">
                   <Folder className="mr-1 size-4" />Weddings<ChevronRight className="size-3.5" />
                   <span className="text-midnight-700">{wedding.couple}</span><ChevronRight className="size-3.5" />
                   <span>{wedding.date}</span><ChevronRight className="size-3.5" />
-                  <span>{kind === "photo" ? "Photo" : "Video"}</span><ChevronRight className="size-3.5" />
-                  {kind === "photo" && <><span>{folderLabel}</span><ChevronRight className="size-3.5" /></>}
-                  <span className="font-semibold text-ink">{kind === "photo" ? momentLabel(moment) : folderLabel}</span>
+                  <span>{cfg.folder}</span><ChevronRight className="size-3.5" />
+                  {cfg.cats && <><span>{catLabel(cat)}</span><ChevronRight className="size-3.5" /></>}
+                  <span className="font-semibold text-ink">{momentLabel(moment || null)}</span>
                 </nav>
-                {kind === "photo" && <Tabs value={cat} onChange={setCat} items={PHOTO_CATS.map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />}
+                {cfg.cats && <Tabs className="max-w-full self-start overflow-x-auto" value={cat} onChange={setCat} items={cfg.cats.map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />}
               </div>
               <div className="mx-5 mb-4 rounded-2xl bg-canvas/70 p-4 ring-1 ring-line sm:mx-6">
                 <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ink"><Tag className="size-4 text-blush-500" />Tag this batch</p>
-                <p className="mt-0.5 text-[12px] text-muted">Every file you add next gets these tags. Upload one moment and one {kind === "photo" ? "camera body" : "camera or recorder"} at a time — you can change a file&apos;s tag later.</p>
+                <p className="mt-0.5 text-[12px] text-muted">Every file you add next gets these tags. Upload one moment and one {cfg.sourceLabel.toLowerCase()} at a time — you can change a file&apos;s tag later.</p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                  <Field label="Moment" htmlFor="tag-moment" required={kind === "video"}>
+                  <Field label="Moment" htmlFor="tag-moment" required={!cfg.mixed}>
                     <Select id="tag-moment" value={moment} onChange={(e) => setMoment(e.target.value)} aria-invalid={needsMoment || undefined}>
-                      {kind === "video" ? <option value="" disabled>Choose the part of the day…</option> : <option value={MIXED.value}>{MIXED.label}</option>}
+                      {!cfg.mixed ? <option value="" disabled>Choose the part of the day…</option> : <option value={MIXED.value}>{MIXED.label}</option>}
                       {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                     </Select>
                   </Field>
-                  <Field label={kind === "photo" ? "Camera body" : "Camera / recorder"} htmlFor="tag-source">
+                  <Field label={cfg.sourceLabel} htmlFor="tag-source">
                     <Select id="tag-source" value={source} onChange={(e) => setSource(e.target.value)}>
                       {SOURCES[kind].map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                     </Select>
                   </Field>
                 </div>
-                {kind === "video" && (
+                {cfg.timed && (
                   <Checkbox className="mt-3 items-start [&>input]:mt-0.5" checked={cameraMarkers} onChange={(e) => setCameraMarkers(e.target.checked)}
                     label={<span className="text-[13px]">I dropped <b>in-camera markers</b> (shot marks / flags) on these clips{isAudioSource(source) ? " or slate claps on this recording" : ""}</span>} />
                 )}
@@ -182,9 +203,9 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
                   className={cn("flex flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-10 text-center transition",
                     needsMoment ? "border-midnight-100 bg-canvas/40 opacity-70" : drag ? "border-blush-400 bg-blush-50" : "border-midnight-100 bg-canvas/60 hover:border-midnight-200")}>
                   <div className="grid size-14 place-items-center rounded-2xl bg-white text-midnight-700 shadow-sm"><UploadCloud className="size-6" /></div>
-                  <p className="mt-4 font-semibold text-ink">Drag & drop {kind === "photo" ? "photos" : "video files"} here</p>
-                  <p className="mt-1 text-sm text-muted">{needsMoment ? "Choose the moment above first" : kind === "photo" ? "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each" : "MP4, MOV, MXF, BRAW, WAV/MP3 audio · up to 100 GB each"}</p>
-                  <input ref={inputRef} type="file" multiple accept={ACCEPT[kind]} className="hidden" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+                  <p className="mt-4 font-semibold text-ink">Drag & drop {cfg.noun} here</p>
+                  <p className="mt-1 text-sm text-muted">{needsMoment ? "Choose the moment above first" : cfg.hint}</p>
+                  <input ref={inputRef} type="file" multiple accept={cfg.accept} className="hidden" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
                   <Button className="mt-5" icon={UploadCloud} disabled={needsMoment} onClick={() => inputRef.current?.click()}>Select files</Button>
                 </div>
                 {kind === "video" && <Alert tone="info" icon={Info} className="mt-4">Large video files can take a while. Keep this tab open until each file shows <b>Uploaded</b>; we then process previews in the background — you can safely leave once processing starts.</Alert>}
@@ -210,7 +231,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
                             <span className="shrink-0 text-muted">{q.status === "uploading" ? `${Math.round(q.pct)}%` : q.status === "queued" ? "Waiting" : q.status === "done" ? (kind === "video" ? "Processing" : "Uploaded") : "Failed"}</span>
                           </div>
                           {q.status === "failed" ? <p className="text-[12px] text-danger-500">{q.error}</p> : <Progress value={q.pct} className="mt-1.5 h-1.5" tone={q.status === "done" ? "success" : "midnight"} />}
-                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === q.category)?.label ?? q.category} · ` : ""}{momentLabel(q.moment || null)} · {SOURCE_LABEL[q.source] ?? q.source}</p>
+                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {cfg.cats ? `${catLabel(q.category)} · ` : ""}{momentLabel(q.moment || null)} · {SOURCE_LABEL[q.source] ?? q.source}</p>
                         </div>
                         {q.status === "failed" && <Button size="sm" variant="outline" icon={RotateCcw} onClick={() => retry(q)}>Retry</Button>}
                         {(q.status === "uploading" || q.status === "queued") && <button onClick={() => cancel(q)} className="text-midnight-300 hover:text-danger-500" aria-label={`Cancel ${q.file.name}`}><X className="size-4" /></button>}
@@ -237,7 +258,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
                       {failedSaved.map((f) => (
                         <label key={f.id} className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[12px] font-medium text-danger-700 ring-1 ring-danger-500/20 hover:bg-danger-50">
                           <RotateCcw className="size-3" />Retry {f.filename}
-                          <input type="file" className="hidden" accept={ACCEPT[kind]} onChange={(e) => {
+                          <input type="file" className="hidden" accept={cfg.accept} onChange={(e) => {
                             const file = e.target.files?.[0];
                             if (file) setQueue((q) => [...q, { key: `${file.name}-${Math.random()}`, file, pct: 0, status: "queued", category: f.category, weddingId: wedding.id, retryOf: f.id, id: f.id, moment: f.moment ?? moment, source: f.source ?? source, cameraMarkers: f.camera_markers }]);
                             e.target.value = "";
@@ -252,9 +273,9 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
                 {visibleFiles.length === 0 ? <EmptyState icon={Icon} title="No files yet" description="Files you upload for this wedding will appear here." /> : (
                   <table className="w-full min-w-[860px] text-sm">
                     <thead><tr className="border-y border-line bg-canvas/60 text-left text-[12px] uppercase tracking-wide text-muted">
-                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Moment</th><th className="px-4 py-3 font-medium">{kind === "photo" ? "Folder · body" : "Camera"}</th><th className="px-4 py-3 font-medium">Size</th>
-                      {kind === "video" && <th className="px-4 py-3 font-medium">Duration</th>}
-                      {kind === "video" && <th className="px-4 py-3 font-medium">Markers</th>}
+                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Moment</th><th className="px-4 py-3 font-medium">{cfg.cats ? `Folder · ${cfg.sourceLabel.toLowerCase()}` : "Camera"}</th><th className="px-4 py-3 font-medium">Size</th>
+                      {cfg.timed && <th className="px-4 py-3 font-medium">Duration</th>}
+                      {cfg.timed && <th className="px-4 py-3 font-medium">Markers</th>}
                       <th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Uploaded</th><th className="px-4 py-3" />
                     </tr></thead>
                     <tbody>
@@ -265,20 +286,20 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
                             {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
                               <Select aria-label={`Moment for ${f.filename}`} value={f.moment ?? ""} disabled={retagging === f.id}
                                 onChange={(e) => retag(f, { moment: e.target.value })}
-                                className={cn("h-9 w-[190px] text-[13px]", !f.moment && kind === "video" && "border-warning-500 text-warning-700")}>
+                                className={cn("h-9 w-[190px] text-[13px]", !f.moment && !cfg.mixed && "border-warning-500 text-warning-700")}>
                                 {!f.moment && <option value="" disabled>Untagged</option>}
-                                {kind === "photo" && <option value={MIXED.value}>{MIXED.label}</option>}
+                                {cfg.mixed && <option value={MIXED.value}>{MIXED.label}</option>}
                                 {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                               </Select>
                             )}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">
-                            {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === f.category)?.label ?? f.category}${f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ""}`
+                            {cfg.cats ? `${catLabel(f.category)}${f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ""}`
                               : <span className="inline-flex items-center gap-1">{isAudioSource(f.source) && <Mic className="size-3.5 text-midnight-300" />}{f.source ? SOURCE_LABEL[f.source] ?? f.source : LEGACY_VIDEO_CATS[f.category] ?? f.category}</span>}
                           </td>
                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{bytes(Number(f.size_bytes))}</td>
-                          {kind === "video" && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
-                          {kind === "video" && (
+                          {cfg.timed && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
+                          {cfg.timed && (
                             <td className="px-4 py-3">
                               {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
                                 <button onClick={() => setMarkersFor(f)} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium text-midnight-700 ring-1 ring-line hover:bg-midnight-50">
@@ -302,7 +323,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
               <HardDrive className="mt-0.5 size-4 shrink-0" />
               <p>Storage: <b className="text-midnight-700">{providerLabel}</b>. Files go directly from your browser to storage{provider === "dropbox" ? " — large videos in 32 MB pieces that retry on their own if your connection drops" : " over signed URLs"}; {CONCURRENCY} files upload in parallel and each one is checked once it lands. Due within 48 hours of the wedding. Keep your backup copies until your coordinator confirms delivery.</p>
             </div>
-            <MarkersModal open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
+            <MarkersModal key={markersFor?.id ?? "none"} open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
           </>
         )}
       </div>

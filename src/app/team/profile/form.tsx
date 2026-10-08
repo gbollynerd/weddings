@@ -1,16 +1,17 @@
 "use client";
 
 import * as React from "react";
+import { SKILLS, skillsLine, type Skill } from "@/lib/skills";
 import { useRouter } from "next/navigation";
-import { Camera, X, Plus, MapPin, Star, Globe, AtSign, Link2, CheckCircle2, Circle, Video, Languages, Award } from "lucide-react";
+import { Camera, X, Plus, MapPin, Star, Globe, AtSign, Link2, CheckCircle2, Circle, Video, Languages, Award, Smartphone } from "lucide-react";
 import { Card, CardHeader, CardBody, Field, Input, Textarea, Select, Button, Avatar, Progress, Badge } from "@/components/ui";
 import { useAction, useToast } from "@/components/ui/interactive";
 import { updateProfileAction } from "@/lib/actions/team";
 import { AddressInput } from "@/components/ui/address-input";
 import { cn } from "@/lib/utils";
 
-type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; discipline: "photo" | "video"; city: string; home_address: string; equipment: string; home_located: boolean };
-const SPECIALTY_SUGGESTIONS = { photo: ["Documentary", "Editorial", "Fine art", "Film photography", "Flash at night", "Family formals", "Cultural ceremonies", "Elopements"], video: ["Cinematic films", "Documentary", "Drone (Part 107)", "Audio", "Social teasers", "Multi-cam ceremonies", "Super 8"] };
+type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; skills: Skill[]; city: string; home_address: string; equipment: string; home_located: boolean };
+const SPECIALTY_SUGGESTIONS: Record<string, string[]> = { content: ["Vertical reels", "Same-day teasers", "Behind the scenes", "iPhone cinematic", "TikTok trends", "Guest moments"], photo: ["Documentary", "Editorial", "Fine art", "Film photography", "Flash at night", "Family formals", "Cultural ceremonies", "Elopements"], video: ["Cinematic films", "Documentary", "Drone (Part 107)", "Audio", "Social teasers", "Multi-cam ceremonies", "Super 8"] };
 
 async function resizeImage(file: File, size = 320): Promise<string> {
   const bmp = await createImageBitmap(file);
@@ -80,7 +81,7 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
             </div>
             <div className="flex-1">
               <p className="text-xl font-semibold text-ink">{f.full_name}</p>
-              <p className="text-sm text-muted">{member.discipline === "photo" ? "Photographer" : "Videographer"} · {market || "Set your home market"}</p>
+              <p className="text-sm text-muted">{skillsLine(f.skills)} · {market || "Set your home market"}</p>
               <div className="mt-3 flex flex-wrap gap-2 text-[12px]"><Badge tone="success"><Star className="size-3" />{stats.rating.toFixed(1)} rating</Badge><Badge>{stats.done} weddings delivered</Badge><Badge tone="blush">{stats.upcoming} upcoming</Badge></div>
             </div>
             {f.avatar_url && <Button variant="ghost" size="sm" onClick={() => set("avatar_url", "")}>Remove photo</Button>}
@@ -98,6 +99,26 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
         </Card>
 
         <Card>
+          <CardHeader title="What you do" subtitle="Pick every kind of work you take on. You'll see and can request jobs for each one — one role per wedding." />
+          <CardBody>
+            <div className="grid gap-2 sm:grid-cols-3" role="group" aria-label="Skills">
+              {SKILLS.map((s) => {
+                const on = f.skills.includes(s.value);
+                const Icon = s.value === "photo" ? Camera : s.value === "video" ? Video : Smartphone;
+                return (
+                  <label key={s.value} className={cn("flex cursor-pointer items-center gap-2.5 rounded-2xl border p-3 text-sm font-medium transition", on ? "border-midnight-900 bg-midnight-50/60 ring-2 ring-midnight-900" : "border-line hover:border-midnight-200")}>
+                    <input type="checkbox" className="size-4 accent-midnight-900" checked={on}
+                      onChange={() => set("skills", on ? f.skills.filter((x) => x !== s.value) : [...f.skills, s.value])} />
+                    <Icon className="size-4 text-midnight-500" />{s.person}
+                  </label>
+                );
+              })}
+            </div>
+            {err.skills && <p className="mt-2 text-[12px] font-medium text-danger-500" role="alert">{err.skills}</p>}
+          </CardBody>
+        </Card>
+
+        <Card>
           <CardHeader title="Work details" />
           <CardBody className="grid gap-4 sm:grid-cols-2">
             <Field label="Home base address" className="sm:col-span-2" error={err.home_address} htmlFor="pf-home">
@@ -109,7 +130,7 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
             <Field label={`Service area — ${f.service_radius} miles`} error={err.service_radius}>
               <input type="range" min={10} max={300} step={10} value={f.service_radius} onChange={(e) => set("service_radius", Number(e.target.value))} className="mt-3 w-full accent-midnight-900" aria-label="Service radius in miles" />
             </Field>
-            <Field label="Specialization" className="sm:col-span-2"><TagInput value={f.specialties} onChange={(v) => set("specialties", v)} suggestions={SPECIALTY_SUGGESTIONS[member.discipline]} placeholder="Type and press Enter" /></Field>
+            <Field label="Specialization" className="sm:col-span-2"><TagInput value={f.specialties} onChange={(v) => set("specialties", v)} suggestions={f.skills.flatMap((s) => SPECIALTY_SUGGESTIONS[s] ?? [])} placeholder="Type and press Enter" /></Field>
             <Field label="Years of experience" error={err.years_experience}><Input type="number" min={0} max={60} value={f.years_experience} onChange={(e) => set("years_experience", Number(e.target.value))} /></Field>
             <Field label="Main equipment" className="sm:col-span-2" hint="Bodies, lenses, audio, drone — helps coordinators staff the right person"><Textarea value={f.equipment} onChange={(e) => set("equipment", e.target.value)} className="min-h-[72px]" maxLength={600} /></Field>
             <Field label="Languages"><TagInput value={f.languages} onChange={(v) => set("languages", v)} suggestions={["English", "Spanish", "French", "Portuguese", "Mandarin", "Yoruba", "Hindi"]} placeholder="Add a language" max={6} /></Field>
@@ -147,9 +168,9 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
             <Avatar name={f.full_name} src={f.avatar_url || null} size={80} ring />
             <p className="mt-3 text-[11px] uppercase tracking-wide text-muted">Couples see</p>
             <p className="font-serif text-xl text-ink">{f.full_name}</p>
-            <p className="text-[13px] text-muted">{member.discipline === "photo" ? "Lead photographer" : "Lead filmmaker"} · {f.years_experience} years</p>
+            <p className="text-[13px] text-muted">{skillsLine(f.skills)} · {f.years_experience} years</p>
             <p className="mt-3 line-clamp-4 text-sm text-midnight-700">{f.bio || "Your bio will appear here."}</p>
-            <div className="mt-3 flex flex-wrap gap-1.5">{f.specialties.slice(0, 4).map((s) => <Badge key={s} tone="blush">{member.discipline === "video" ? <Video className="size-3" /> : <Award className="size-3" />}{s}</Badge>)}</div>
+            <div className="mt-3 flex flex-wrap gap-1.5">{f.specialties.slice(0, 4).map((s) => <Badge key={s} tone="blush"><Award className="size-3" />{s}</Badge>)}</div>
             <p className="mt-3 flex items-center gap-1.5 text-[12px] text-muted"><MapPin className="size-3.5" />{market} · within {f.service_radius} mi</p>
             <p className="mt-1 flex items-center gap-1.5 text-[12px] text-muted"><Languages className="size-3.5" />{f.languages.join(", ")}</p>
           </div>

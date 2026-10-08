@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { skillsLine } from "@/lib/skills";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Search, PenSquare, Paperclip, Send, ArrowLeft, MessageCircle, FileText, Users, Heart, LifeBuoy, X, Loader2, CheckCheck, UserPlus, UserMinus } from "lucide-react";
@@ -13,10 +14,10 @@ import { cn, chatTime, fmtDate, bytes } from "@/lib/utils";
 export type Convo = { id: string; subject: string; kind: string; couple: string | null; last_message_at: string; last_body: string | null; last_sender: string | null; unread: number; participants: { id: string; name: string; avatar: string | null; role: string }[] };
 export type Thread = { id: string; subject: string; kind: string; couple: string | null; wedding_date: string | null; messages: { id: string; body: string; created_at: string; sender_id: string; attachment_name: string | null; attachment_size: number | null; full_name: string; avatar_url: string | null; role: string }[]; participants: { id: string; full_name: string; avatar_url: string | null; role: string; last_read_at: string }[] };
 
-const roleLabel: Record<string, string> = { coordinator: "Coordinator", photographer: "Photographer", videographer: "Videographer", client: "Client", admin: "Admin" };
+const roleLabel: Record<string, string> = { coordinator: "Coordinator", freelancer: "Freelancer", client: "Client", admin: "Admin" };
 const kindIcon = { wedding: Heart, support: LifeBuoy, direct: MessageCircle } as Record<string, typeof Heart>;
 
-type Contact = { id: string; full_name: string; role: string; avatar_url: string | null };
+type Contact = { id: string; full_name: string; role: string; avatar_url: string | null; skills?: string[] | null };
 export function MessagesView({ me, convos, thread, weddings, contacts, isClient, canManage = false }: {
   me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; isClient: boolean; canManage?: boolean;
 }) {
@@ -88,7 +89,7 @@ export function MessagesView({ me, convos, thread, weddings, contacts, isClient,
       <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden lg:flex")}>
         {thread ? <ThreadPane me={me} thread={thread} canManage={canManage} contacts={contacts} onBack={() => router.push(pathname)} /> : (
           <div className="grid flex-1 place-items-center">
-            <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins, photographers and videographers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
+            <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins and other freelancers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
           </div>
         )}
       </section>
@@ -209,7 +210,7 @@ function ThreadPane({ me, thread, onBack, canManage, contacts }: { me: string; t
   );
 }
 
-const ROLE_GROUP: [string, string[]][] = [["Coordinators & admins", ["coordinator", "admin"]], ["Photographers", ["photographer"]], ["Videographers", ["videographer"]]];
+const ROLE_GROUP: [string, string[]][] = [["Coordinators & admins", ["coordinator", "admin"]], ["Freelancers", ["freelancer"]]];
 
 function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: { open: boolean; onClose: () => void; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; onSent: (id: string) => void; isClient: boolean }) {
   const { run, pending } = useAction();
@@ -238,7 +239,7 @@ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: {
   };
   return (
     <Modal open={open} onClose={onClose} title="New message"
-      description={isClient ? "Your coordinator handles your messages and loops in your photo/video team when needed." : "Message coordinators, admins and other photographers & videographers."}
+      description={isClient ? "Your coordinator handles your messages and loops in your photo, video and content team when needed." : "Message coordinators, admins and other freelancers."}
       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button icon={Send} loading={pending} onClick={submit}>Send message</Button></>}>
       <div className="space-y-4">
         {!isClient && (
@@ -260,7 +261,7 @@ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: {
                       {list.map((c) => (
                         <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
                           <input type="checkbox" className="size-4 accent-midnight-900" checked={to.includes(c.id)} onChange={() => toggle(c.id)} />
-                          <span className="flex-1 truncate text-ink">{c.full_name}</span>
+                          <span className="flex-1 truncate text-ink">{c.full_name}{c.skills?.length ? <span className="ml-1.5 text-[11px] text-muted">{skillsLine(c.skills)}</span> : null}</span>
                           <span className="text-[11px] capitalize text-muted">{c.role}</span>
                         </label>
                       ))}
@@ -306,7 +307,7 @@ function PeopleModal({ open, onClose, me, thread, contacts }: { open: boolean; o
   React.useEffect(() => { if (!pending) setRemoving(null); }, [pending]);
   return (
     <Modal open={open} onClose={onClose} title="People in this conversation"
-      description={hasClient ? "Loop in the photographer or videographer when the couple needs them. They'll see the whole conversation and can reply here, but can't start new conversations with the couple." : "Add or remove coordinators, admins, photographers and videographers."}
+      description={hasClient ? "Loop in a photographer, videographer or content creator when the couple needs them. They'll see the whole conversation and can reply here, but can't start new conversations with the couple." : "Add or remove coordinators, admins, photographers and videographers."}
       footer={<><Button variant="outline" onClick={onClose}>Done</Button><Button icon={UserPlus} loading={pending && !removing} disabled={!pick.length} onClick={add}>{pick.length > 1 ? `Add ${pick.length} people` : "Add"}</Button></>}>
       <div className="space-y-5">
         <div>
@@ -342,7 +343,7 @@ function PeopleModal({ open, onClose, me, thread, contacts }: { open: boolean; o
                     {list.map((c) => (
                       <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
                         <input type="checkbox" className="size-4 accent-midnight-900" checked={pick.includes(c.id)} onChange={() => toggle(c.id)} />
-                        <span className="flex-1 truncate text-ink">{c.full_name}</span>
+                        <span className="flex-1 truncate text-ink">{c.full_name}{c.skills?.length ? <span className="ml-1.5 text-[11px] text-muted">{skillsLine(c.skills)}</span> : null}</span>
                         <span className="text-[11px] capitalize text-muted">{c.role}</span>
                       </label>
                     ))}

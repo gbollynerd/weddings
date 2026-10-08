@@ -7,7 +7,7 @@ export const CONTRACT_PLACEHOLDERS: [string, string][] = [
   ["company", "Your company name"],
   ["contractor_name", "Team member's full name"],
   ["contractor_email", "Team member's email"],
-  ["discipline", "photographer / videographer"],
+  ["discipline", "photographer / videographer / content creator (from the slot)"],
   ["role", "Role on this wedding, e.g. Lead photographer"],
   ["couple", "The couple's names"],
   ["wedding_date", "Wedding date"],

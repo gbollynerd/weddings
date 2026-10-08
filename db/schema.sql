@@ -586,3 +586,27 @@ create table if not exists standards_acknowledgments (
   unique (team_member_id, version)
 );
 alter table standards_acknowledgments enable row level security;
+
+-- ───────────────────────── Freelancers with several skills ─────────────────────────
+-- One account can be a photographer, videographer and/or content creator. Team accounts share the single
+-- 'freelancer' role; what jobs they can take comes from team_members.skills. Approval is per person.
+insert into roles (key, name, permissions) values ('freelancer', 'Freelancer',
+  array['availability:manage','opportunity:accept','wedding:view_assigned','upload:create','payout:view','license:submit','message:send','profile:edit'])
+  on conflict (key) do nothing;
+alter table team_members add column if not exists skills text[] not null default '{}';
+update team_members set skills = array[discipline] where cardinality(skills) = 0 and discipline is not null;
+alter table team_members alter column discipline drop not null;
+alter table team_members drop constraint if exists team_members_skills_check;
+alter table team_members add constraint team_members_skills_check check (skills <@ array['photo','video','content']::text[]);
+update users set role = 'freelancer' where role in ('photographer','videographer');
+
+alter table wedding_assignments drop constraint if exists wedding_assignments_role_check;
+alter table wedding_assignments add constraint wedding_assignments_role_check
+  check (role in ('lead_photo','second_photo','lead_video','second_video','lead_content'));
+alter table uploads drop constraint if exists uploads_kind_check;
+alter table uploads add constraint uploads_kind_check check (kind in ('photo','video','content','document'));
+alter table handbook_articles drop constraint if exists handbook_articles_audience_check;
+alter table handbook_articles add constraint handbook_articles_audience_check check (audience in ('all','photo','video','content'));
+insert into addons (slug, name, description, price, unit, applies_to, sort) values
+  ('content-creator', 'Content creator', 'A dedicated creator for phone-shot reels, behind-the-scenes and a same-day teaser for your socials.', 900, 'flat', '{photo,video,both}', 5)
+  on conflict (slug) do nothing;

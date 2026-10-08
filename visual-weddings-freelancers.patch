@@ -1,0 +1,2175 @@
+diff --git a/db/schema.sql b/db/schema.sql
+index 647ab9c..ec59d32 100644
+--- a/db/schema.sql
++++ b/db/schema.sql
+@@ -586,3 +586,27 @@ create table if not exists standards_acknowledgments (
+   unique (team_member_id, version)
+ );
+ alter table standards_acknowledgments enable row level security;
++
++-- ───────────────────────── Freelancers with several skills ─────────────────────────
++-- One account can be a photographer, videographer and/or content creator. Team accounts share the single
++-- 'freelancer' role; what jobs they can take comes from team_members.skills. Approval is per person.
++insert into roles (key, name, permissions) values ('freelancer', 'Freelancer',
++  array['availability:manage','opportunity:accept','wedding:view_assigned','upload:create','payout:view','license:submit','message:send','profile:edit'])
++  on conflict (key) do nothing;
++alter table team_members add column if not exists skills text[] not null default '{}';
++update team_members set skills = array[discipline] where cardinality(skills) = 0 and discipline is not null;
++alter table team_members alter column discipline drop not null;
++alter table team_members drop constraint if exists team_members_skills_check;
++alter table team_members add constraint team_members_skills_check check (skills <@ array['photo','video','content']::text[]);
++update users set role = 'freelancer' where role in ('photographer','videographer');
++
++alter table wedding_assignments drop constraint if exists wedding_assignments_role_check;
++alter table wedding_assignments add constraint wedding_assignments_role_check
++  check (role in ('lead_photo','second_photo','lead_video','second_video','lead_content'));
++alter table uploads drop constraint if exists uploads_kind_check;
++alter table uploads add constraint uploads_kind_check check (kind in ('photo','video','content','document'));
++alter table handbook_articles drop constraint if exists handbook_articles_audience_check;
++alter table handbook_articles add constraint handbook_articles_audience_check check (audience in ('all','photo','video','content'));
++insert into addons (slug, name, description, price, unit, applies_to, sort) values
++  ('content-creator', 'Content creator', 'A dedicated creator for phone-shot reels, behind-the-scenes and a same-day teaser for your socials.', 900, 'flat', '{photo,video,both}', 5)
++  on conflict (slug) do nothing;
+diff --git a/scripts/seed.ts b/scripts/seed.ts
+index bea762e..49bf0c7 100644
+--- a/scripts/seed.ts
++++ b/scripts/seed.ts
+@@ -34,8 +34,7 @@ async function main() {
+   // ── Roles
+   const roles = [
+     ["client", "Client", ["booking:create", "wedding:view_own", "payment:make", "message:send", "deliverable:view"]],
+-    ["photographer", "Photographer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send"]],
+-    ["videographer", "Videographer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send"]],
++    ["freelancer", "Freelancer", ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send", "profile:edit"]],
+     ["coordinator", "Coordinator", ["wedding:manage", "team:assign", "booking:manage", "license:review", "message:send", "handbook:edit"]],
+     ["admin", "Administrator", ["*"]],
+   ] as const;
+@@ -84,38 +83,39 @@ async function main() {
+   const coordinator = await user("grace@visualweddings.test", "coordinator", "Grace Thompson", "(704) 555-0142", AVATAR.w2);
+   const admin = await user("admin@visualweddings.test", "admin", "Alex Rivera", "(704) 555-0100");
+ 
+-  type TM = { email: string; name: string; disc: "photo" | "video"; market: string; avatar?: string; years: number; specialties: string[]; bio: string; langs?: string[]; rating: number };
++  type TM = { email: string; name: string; skills: ("photo" | "video" | "content")[]; market: string; avatar?: string; years: number; specialties: string[]; bio: string; langs?: string[]; rating: number };
+   const team: TM[] = [
+-    { email: "marcus@visualweddings.test", name: "Marcus Johnson", disc: "photo", market: "charlotte-nc", avatar: AVATAR.m2, years: 8, rating: 4.9,
++    { email: "marcus@visualweddings.test", name: "Marcus Johnson", skills: ["photo", "content"], market: "charlotte-nc", avatar: AVATAR.m2, years: 8, rating: 4.9,
+       specialties: ["Documentary", "Golden-hour portraits", "Large receptions"], langs: ["English", "Spanish"],
+       bio: "Documentary-first wedding photographer based in Charlotte. I love quiet in-between moments and big, joyful dance floors." },
+-    { email: "daniel@visualweddings.test", name: "Daniel Williams", disc: "video", market: "raleigh-durham-nc", avatar: AVATAR.m1, years: 6, rating: 4.8,
++    { email: "daniel@visualweddings.test", name: "Daniel Williams", skills: ["video"], market: "raleigh-durham-nc", avatar: AVATAR.m1, years: 6, rating: 4.8,
+       specialties: ["Cinematic films", "Drone (Part 107)", "Audio"], bio: "Filmmaker focused on clean audio and honest storytelling. FAA Part 107 certified." },
+-    { email: "michael@visualweddings.test", name: "Michael Carter", disc: "photo", market: "greensboro-nc", avatar: AVATAR.m3, years: 11, rating: 4.9,
++    { email: "michael@visualweddings.test", name: "Michael Carter", skills: ["photo"], market: "greensboro-nc", avatar: AVATAR.m3, years: 11, rating: 4.9,
+       specialties: ["Classic portraits", "Family formals", "Church ceremonies"], bio: "Eleven seasons and counting. Calm, organised and great with big families." },
+-    { email: "aisha@visualweddings.test", name: "Aisha Bello", disc: "photo", market: "atlanta-ga", avatar: AVATAR.w3, years: 7, rating: 5.0,
++    { email: "aisha@visualweddings.test", name: "Aisha Bello", skills: ["photo"], market: "atlanta-ga", avatar: AVATAR.w3, years: 7, rating: 5.0,
+       specialties: ["Editorial", "Cultural ceremonies", "Flash at night"], langs: ["English", "Yoruba"], bio: "Editorial eye, warm heart. Specialist in multi-day and cultural celebrations." },
+-    { email: "priya@visualweddings.test", name: "Priya Nair", disc: "video", market: "charlotte-nc", avatar: AVATAR.w1, years: 5, rating: 4.8,
++    { email: "priya@visualweddings.test", name: "Priya Nair", skills: ["video"], market: "charlotte-nc", avatar: AVATAR.w1, years: 5, rating: 4.8,
+       specialties: ["Highlight films", "Social teasers"], langs: ["English", "Hindi"], bio: "I cut films that feel like your favourite song." },
+-    { email: "jordan@visualweddings.test", name: "Jordan Lee", disc: "photo", market: "raleigh-durham-nc", years: 4, rating: 4.7, specialties: ["Candid", "Outdoor"], bio: "Candid storyteller who loves barn and garden weddings." },
+-    { email: "sofia@visualweddings.test", name: "Sofia Martinez", disc: "photo", market: "charlotte-nc", years: 3, rating: 4.8, specialties: ["Second shooting", "Details"], langs: ["English", "Spanish"], bio: "Detail-obsessed second shooter and rising lead." },
+-    { email: "kwame@visualweddings.test", name: "Kwame Mensah", disc: "video", market: "atlanta-ga", years: 9, rating: 4.9, specialties: ["Feature films", "Multi-cam ceremonies"], bio: "Documentary filmmaker; multi-camera ceremony specialist." },
+-    { email: "elena@visualweddings.test", name: "Elena Rossi", disc: "photo", market: "washington-dc", years: 10, rating: 4.9, specialties: ["Black tie", "Architecture"], langs: ["English", "Italian"], bio: "Fine-art approach for formal city weddings." },
+-    { email: "tyler@visualweddings.test", name: "Tyler Brooks", disc: "video", market: "greensboro-nc", years: 3, rating: 4.6, specialties: ["Gimbal work", "Reels"], bio: "Energetic shooter for dance-floor heavy weddings." },
++    { email: "jordan@visualweddings.test", name: "Jordan Lee", skills: ["photo"], market: "raleigh-durham-nc", years: 4, rating: 4.7, specialties: ["Candid", "Outdoor"], bio: "Candid storyteller who loves barn and garden weddings." },
++    { email: "sofia@visualweddings.test", name: "Sofia Martinez", skills: ["photo"], market: "charlotte-nc", years: 3, rating: 4.8, specialties: ["Second shooting", "Details"], langs: ["English", "Spanish"], bio: "Detail-obsessed second shooter and rising lead." },
++    { email: "kwame@visualweddings.test", name: "Kwame Mensah", skills: ["video"], market: "atlanta-ga", years: 9, rating: 4.9, specialties: ["Feature films", "Multi-cam ceremonies"], bio: "Documentary filmmaker; multi-camera ceremony specialist." },
++    { email: "elena@visualweddings.test", name: "Elena Rossi", skills: ["photo"], market: "washington-dc", years: 10, rating: 4.9, specialties: ["Black tie", "Architecture"], langs: ["English", "Italian"], bio: "Fine-art approach for formal city weddings." },
++    { email: "jade@visualweddings.test", name: "Jade Thompson", skills: ["content"], market: "charlotte-nc", years: 3, rating: 4.9, specialties: ["Vertical reels", "Same-day teasers", "Behind the scenes"], bio: "Wedding content creator: phone-first reels and same-day teasers couples can post that night." },
++    { email: "tyler@visualweddings.test", name: "Tyler Brooks", skills: ["video", "content"], market: "greensboro-nc", years: 3, rating: 4.6, specialties: ["Gimbal work", "Reels"], bio: "Energetic shooter for dance-floor heavy weddings." },
+   ];
+   const tm: Record<string, { id: string; user: string }> = {};
+   for (const t of team) {
+-    const uid = await user(t.email, t.disc === "photo" ? "photographer" : "videographer", t.name, `(${700 + team.indexOf(t)}) 555-01${10 + team.indexOf(t)}`, t.avatar);
+-    const [r] = await sql`insert into team_members (user_id, discipline, bio, home_market_id, service_radius, specialties, years_experience, languages, portfolio_url, instagram, website, rating, payout_last4)
+-      values (${uid}, ${t.disc}, ${t.bio}, ${marketId[t.market]}, ${t.market === "charlotte-nc" ? 90 : 60}, ${t.specialties}, ${t.years}, ${t.langs ?? ["English"]},
++    const uid = await user(t.email, "freelancer", t.name, `(${700 + team.indexOf(t)}) 555-01${10 + team.indexOf(t)}`, t.avatar);
++    const [r] = await sql`insert into team_members (user_id, skills, discipline, bio, home_market_id, service_radius, specialties, years_experience, languages, portfolio_url, instagram, website, rating, payout_last4)
++      values (${uid}, ${t.skills}, ${t.skills.find((x) => x !== "content") ?? null}, ${t.bio}, ${marketId[t.market]}, ${t.market === "charlotte-nc" ? 90 : 60}, ${t.specialties}, ${t.years}, ${t.langs ?? ["English"]},
+               ${"https://portfolio.example.com/" + t.email.split("@")[0]}, ${"@" + t.email.split("@")[0] + ".films"}, null, ${t.rating}, ${String(4000 + team.indexOf(t) * 137).slice(-4)}) returning id`;
+     tm[t.email.split("@")[0]] = { id: r.id, user: uid };
+   }
+   // A photographer who applied through /join and is waiting for review
+   {
+-    const uid = await user("nina@visualweddings.test", "photographer", "Nina Okafor", "(704) 555-0188");
+-    await sql`insert into team_members (user_id, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, status, applied_at, specialties)
+-      values (${uid}, 'photo', ${"Documentary wedding photographer — 40+ weddings as a second shooter and 12 as a lead. I love candid family moments and dance floors."},
++    const uid = await user("nina@visualweddings.test", "freelancer", "Nina Okafor", "(704) 555-0188");
++    await sql`insert into team_members (user_id, skills, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, status, applied_at, specialties)
++      values (${uid}, ${["photo", "content"]}, 'photo', ${"Documentary wedding photographer — 40+ weddings as a second shooter and 12 as a lead. I love candid family moments and dance floors."},
+               ${marketId["charlotte-nc"]}, 4, 'https://portfolio.example.com/nina', '@nina.okafor.photo', 'Canon R6 II ×2, 24-70 f/2.8, 70-200 f/2.8, 35 f/1.4, Godox flashes',
+               '1200 East Blvd, Charlotte, NC 28203', 'applicant', now() - interval '2 days', ${["Documentary", "Candid"]})`;
+   }
+@@ -127,10 +127,11 @@ async function main() {
+     slots: { role: string; who?: string; status: string; expiresIn?: number; miles?: number; req?: string[]; notes?: string }[];
+   };
+   const W_: W[] = [
+-    { key: "sarah", couple: ["Sarah Mitchell", "James Porter"], email: "sarah@visualweddings.test", offset: 15, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-signature", addons: ["additional-hour"], guests: 160, type: "Garden ceremony & reception", start: "14:00",
+-      slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }] },
+-    { key: "olivia", couple: ["Olivia Grant", "Marcus Reed"], email: "olivia@example.test", offset: 29, market: "raleigh-durham-nc", venue: "Magnolia Barn", pkg: "duo-signature", guests: 190, type: "Rustic barn", start: "15:00",
+-      slots: [{ role: "lead_photo", who: "jordan", status: "accepted" }, { role: "lead_video", who: "daniel", status: "accepted" }, { role: "second_photo", status: "open", expiresIn: 12, miles: 158, req: ["2+ seasons second shooting", "Two bodies, dual slots"], notes: "Barn venue — bring flash for the reception." }] },
++    { key: "sarah", couple: ["Sarah Mitchell", "James Porter"], email: "sarah@visualweddings.test", offset: 15, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-signature", addons: ["additional-hour", "content-creator"], guests: 160, type: "Garden ceremony & reception", start: "14:00",
++      slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }, { role: "lead_content", who: "jade", status: "accepted", req: ["Recent phone that shoots 4K", "Gimbal or stabiliser", "Black attire"] }] },
++    { key: "olivia", couple: ["Olivia Grant", "Marcus Reed"], email: "olivia@example.test", offset: 29, market: "raleigh-durham-nc", venue: "Magnolia Barn", pkg: "duo-signature", addons: ["content-creator"], guests: 190, type: "Rustic barn", start: "15:00",
++      slots: [{ role: "lead_photo", who: "jordan", status: "accepted" }, { role: "lead_video", who: "daniel", status: "accepted" },
++        { role: "lead_content", status: "open", expiresIn: 14, req: ["Recent phone that shoots 4K", "Gimbal or stabiliser", "Social-first portfolio", "Black attire"], notes: "Couple wants a same-day teaser for their reception slideshow." }, { role: "second_photo", status: "open", expiresIn: 12, miles: 158, req: ["2+ seasons second shooting", "Two bodies, dual slots"], notes: "Barn venue — bring flash for the reception." }] },
+     { key: "emily", couple: ["Emily Chen", "David Okafor"], email: "emily@example.test", offset: 36, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-legacy", addons: ["drone-coverage"], guests: 240, type: "Black-tie ballroom", start: "16:00",
+       slots: [{ role: "lead_photo", who: "marcus", status: "accepted" }, { role: "second_photo", who: "sofia", status: "accepted" }, { role: "lead_video", who: "priya", status: "accepted" }, { role: "second_video", who: "daniel", status: "accepted", miles: 310 }] },
+     { key: "hannah", couple: ["Hannah Brooks", "Christopher Lane"], email: "hannah@example.test", offset: 21, market: "greensboro-nc", venue: "Sycamore Grove", pkg: "photo-signature", guests: 130, type: "Garden", start: "15:30",
+@@ -154,8 +155,8 @@ async function main() {
+     { key: "brianna", couple: ["Brianna Hall", "Cole Ramirez"], email: "brianna@example.test", offset: 84, market: "charlotte-nc", venue: "Willow Creek Estate", pkg: "photo-essentials", status: "cancelled", guests: 90, type: "Garden",
+       slots: [{ role: "lead_photo", who: "marcus", status: "cancelled" }] },
+     // Completed
+-    { key: "rachel", couple: ["Rachel Kim", "Benjamin Ross"], email: "rachel@example.test", offset: -6, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-signature", status: "completed", guests: 200, type: "Ballroom", start: "15:00",
+-      slots: [{ role: "lead_photo", who: "marcus", status: "completed" }, { role: "second_photo", who: "sofia", status: "completed" }, { role: "lead_video", who: "daniel", status: "completed" }] },
++    { key: "rachel", couple: ["Rachel Kim", "Benjamin Ross"], email: "rachel@example.test", offset: -6, market: "charlotte-nc", venue: "The Ivory Atrium", pkg: "duo-signature", addons: ["content-creator"], status: "completed", guests: 200, type: "Ballroom", start: "15:00",
++      slots: [{ role: "lead_photo", who: "marcus", status: "completed" }, { role: "second_photo", who: "sofia", status: "completed" }, { role: "lead_video", who: "daniel", status: "completed" }, { role: "lead_content", who: "jade", status: "completed" }] },
+     { key: "lauren", couple: ["Lauren Hayes", "Joshua Bell"], email: "lauren@example.test", offset: -20, market: "raleigh-durham-nc", venue: "Heritage Tobacco Warehouse", pkg: "duo-signature", status: "completed", guests: 230, type: "Industrial",
+       slots: [{ role: "lead_photo", who: "jordan", status: "completed" }, { role: "second_photo", who: "marcus", status: "completed", miles: 170 }, { role: "lead_video", who: "daniel", status: "completed" }] },
+     { key: "megan", couple: ["Megan Ward", "Andrew Kim"], email: "megan@example.test", offset: -34, market: "charlotte-nc", venue: "Lakeview Pavilion", pkg: "photo-heirloom", status: "completed", guests: 150, type: "Lakeside",
+diff --git a/src/app/(auth)/join/join-form.tsx b/src/app/(auth)/join/join-form.tsx
+index 7ca5ac1..28ab3a7 100644
+--- a/src/app/(auth)/join/join-form.tsx
++++ b/src/app/(auth)/join/join-form.tsx
+@@ -1,14 +1,15 @@
+ "use client";
+ import * as React from "react";
++import type { Skill } from "@/lib/skills";
+ import { useRouter } from "next/navigation";
+-import { AlertCircle, Camera, Video } from "lucide-react";
++import { AlertCircle, Camera, Video, Smartphone } from "lucide-react";
+ import { Field, Input, Textarea, Select, Alert, Button, Checkbox } from "@/components/ui";
+ import { AddressInput } from "@/components/ui/address-input";
+ import { applyToTeamAction, type ApplyInput } from "@/lib/actions/auth";
+ import { cn } from "@/lib/utils";
+ 
+-type F = { fullName: string; email: string; phone: string; password: string; discipline: "" | "photo" | "video"; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
+-const EMPTY: F = { fullName: "", email: "", phone: "", password: "", discipline: "", homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
++type F = { fullName: string; email: string; phone: string; password: string; skills: Skill[]; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
++const EMPTY: F = { fullName: "", email: "", phone: "", password: "", skills: [], homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
+ 
+ export function JoinForm({ markets }: { markets: { slug: string; label: string }[] }) {
+   const router = useRouter();
+@@ -22,7 +23,7 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
+     e.preventDefault();
+     setBusy(true); setMsg(null);
+     try {
+-      const r = await applyToTeamAction({ ...f, discipline: f.discipline || undefined } as unknown as ApplyInput);
++      const r = await applyToTeamAction({ ...f } as unknown as ApplyInput);
+       if (r.ok) { router.push("/team"); router.refresh(); return; }
+       setFe(r.fieldErrors ?? {}); setMsg(r.message ?? "Something went wrong.");
+       requestAnimationFrame(() => document.querySelector<HTMLElement>("[aria-invalid=true]")?.focus());
+@@ -32,16 +33,19 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
+     <form onSubmit={submit} className="mt-8 space-y-4" noValidate>
+       {msg && <Alert tone="danger" icon={AlertCircle}>{msg}</Alert>}
+       <fieldset>
+-        <legend className="mb-1.5 text-[13px] font-medium text-midnight-700">I shoot <span className="text-blush-500">*</span></legend>
+-        <div className="grid grid-cols-2 gap-2" role="radiogroup">
+-          {([["photo", "Photography", Camera], ["video", "Videography", Video]] as const).map(([v, label, I]) => (
+-            <label key={v} className={cn("flex cursor-pointer items-center gap-2 rounded-2xl border p-3 text-sm font-medium transition", f.discipline === v ? "border-midnight-900 ring-2 ring-midnight-900/10" : "border-line hover:border-midnight-200")}>
+-              <input type="radio" name="discipline" value={v} checked={f.discipline === v} onChange={() => set("discipline", v)} className="sr-only" />
+-              <I className="size-4 text-midnight-500" />{label}
+-            </label>
+-          ))}
++        <legend className="mb-1.5 text-[13px] font-medium text-midnight-700">I work as <span className="text-blush-500">*</span> <span className="font-normal text-muted">— choose all that apply</span></legend>
++        <div className="grid gap-2 sm:grid-cols-3" role="group">
++          {([["photo", "Photographer", Camera], ["video", "Videographer", Video], ["content", "Content creator", Smartphone]] as const).map(([v, label, I]) => {
++            const on = f.skills.includes(v);
++            return (
++              <label key={v} className={cn("flex cursor-pointer items-center gap-2 rounded-2xl border p-3 text-sm font-medium transition", on ? "border-midnight-900 ring-2 ring-midnight-900/10" : "border-line hover:border-midnight-200")}>
++                <input type="checkbox" name="skills" value={v} checked={on} onChange={() => set("skills", on ? f.skills.filter((x) => x !== v) : [...f.skills, v])} className="size-4 accent-midnight-900" />
++                <I className="size-4 text-midnight-500" />{label}
++              </label>
++            );
++          })}
+         </div>
+-        {fe.discipline && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.discipline}</p>}
++        {fe.skills && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.skills}</p>}
+       </fieldset>
+       <Field label="Full name" error={fe.fullName} required htmlFor="j-name"><Input id="j-name" value={f.fullName} onChange={on("fullName")} autoComplete="name" aria-invalid={!!fe.fullName} /></Field>
+       <Field label="Email" error={fe.email} required htmlFor="j-email"><Input id="j-email" type="email" value={f.email} onChange={on("email")} autoComplete="email" aria-invalid={!!fe.email} /></Field>
+diff --git a/src/app/(auth)/join/page.tsx b/src/app/(auth)/join/page.tsx
+index a45c522..c2921ee 100644
+--- a/src/app/(auth)/join/page.tsx
++++ b/src/app/(auth)/join/page.tsx
+@@ -6,7 +6,7 @@ import { homeFor } from "@/lib/permissions";
+ import { sql } from "@/lib/db";
+ import { JoinForm } from "./join-form";
+ 
+-export const metadata: Metadata = { title: "Join our team", description: "Apply to shoot weddings with Visual Weddings as a photographer or videographer." };
++export const metadata: Metadata = { title: "Join our team", description: "Apply to work weddings with Visual Weddings as a photographer, videographer or content creator." };
+ 
+ export default async function JoinPage() {
+   const s = await getSession();
+@@ -14,7 +14,7 @@ export default async function JoinPage() {
+   const markets = await sql`select slug, city, state from markets where active order by state, city`;
+   return (
+     <div>
+-      <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-blush-600">Photographers &amp; videographers</p>
++      <p className="text-[12px] font-semibold uppercase tracking-[0.14em] text-blush-600">Photographers, videographers &amp; content creators</p>
+       <h1 className="mt-2 font-serif text-3xl text-ink">Join our team</h1>
+       <p className="mt-2 text-sm text-muted">Shoot weddings near you on your schedule. Apply below — a coordinator reviews every application, usually within a few business days.</p>
+       <JoinForm markets={markets.map((m) => ({ slug: m.slug, label: `${m.city}, ${m.state}` }))} />
+diff --git a/src/app/(auth)/login/page.tsx b/src/app/(auth)/login/page.tsx
+index eff8aa0..e274d85 100644
+--- a/src/app/(auth)/login/page.tsx
++++ b/src/app/(auth)/login/page.tsx
+@@ -20,7 +20,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
+         Planning a wedding? <Link href={`/signup${sp.next ? `?next=${encodeURIComponent(sp.next)}` : ""}`} className="font-medium text-blush-600 hover:underline">Create an account</Link>
+       </p>
+       <p className="mt-2 text-center text-sm text-muted">
+-        Photographer or videographer? <Link href="/join" className="font-medium text-blush-600 hover:underline">Apply to join our team</Link>
++        Photographer, videographer or content creator? <Link href="/join" className="font-medium text-blush-600 hover:underline">Apply to join our team</Link>
+       </p>
+     </div>
+   );
+diff --git a/src/app/admin/board.tsx b/src/app/admin/board.tsx
+index 2d1c59e..fa41d1b 100644
+--- a/src/app/admin/board.tsx
++++ b/src/app/admin/board.tsx
+@@ -1,5 +1,6 @@
+ "use client";
+ import * as React from "react";
++import { skillsLine } from "@/lib/skills";
+ import Link from "next/link";
+ import { useRouter } from "next/navigation";
+ import { CheckCircle2, XCircle, FileText, Star, Camera, Video } from "lucide-react";
+@@ -146,7 +147,7 @@ export function AdminBoard({ bookings, licenses, requests, payouts, open, team,
+           {team.map((t) => (
+             <Card key={t.full_name as string} className="flex items-center gap-3 p-4">
+               <Avatar name={t.full_name as string} src={t.avatar_url as string | null} size={44} />
+-              <div className="min-w-0 flex-1"><p className="truncate font-medium text-ink">{t.full_name}</p><p className="text-[12px] text-muted">{t.discipline === "photo" ? "Photographer" : "Videographer"} · {t.city}</p></div>
++              <div className="min-w-0 flex-1"><p className="truncate font-medium text-ink">{t.full_name}</p><p className="text-[12px] text-muted">{skillsLine(t.skills as string[])} · {t.city}</p></div>
+               <div className="text-right text-[12px]"><p className="flex items-center gap-1 text-ink"><Star className="size-3 fill-blush-400 text-blush-400" />{Number(t.rating).toFixed(1)}</p><p className="text-muted">{t.upcoming} upcoming</p></div>
+             </Card>
+           ))}
+diff --git a/src/app/admin/contract/page.tsx b/src/app/admin/contract/page.tsx
+index afe4ed9..3df8186 100644
+--- a/src/app/admin/contract/page.tsx
++++ b/src/app/admin/contract/page.tsx
+@@ -10,7 +10,7 @@ export default async function ContractPage() {
+   const [t, history] = await Promise.all([activeTemplate(), templateHistory()]);
+   return (
+     <div>
+-      <p className="mb-6 max-w-3xl text-sm text-muted">The independent contractor agreement photographers and videographers sign before taking a wedding. Each signature keeps a frozen copy, so edits only apply to future signatures.</p>
++      <p className="mb-6 max-w-3xl text-sm text-muted">The independent contractor agreement freelancers (photographers, videographers and content creators) sign before taking a wedding. Each signature keeps a frozen copy, so edits only apply to future signatures.</p>
+       <ContractEditor
+         current={{ version: t.version, title: t.title, body: t.body, created_at: new Date(t.created_at).toISOString(), created_by_name: t.created_by_name }}
+         placeholders={CONTRACT_PLACEHOLDERS}
+diff --git a/src/app/admin/page.tsx b/src/app/admin/page.tsx
+index f0aad08..9436c6e 100644
+--- a/src/app/admin/page.tsx
++++ b/src/app/admin/page.tsx
+@@ -34,7 +34,7 @@ export default async function AdminHome() {
+         where p.status in ('pending','processing','on_hold') order by p.requested_at`,
+     sql`select a.id, a.role, a.compensation, w.id as wedding_id, w.couple, w.wedding_date::text, m.city, m.state, a.expires_at from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
+         where a.status = 'open' and w.wedding_date >= current_date order by w.wedding_date limit 20`,
+-    sql`select u.full_name, u.avatar_url, t.discipline, m.city, t.rating,
++    sql`select u.full_name, u.avatar_url, t.skills, m.city, t.rating,
+           (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.team_member_id = t.id and a.status = 'accepted' and w.wedding_date >= current_date)::int as upcoming
+         from team_members t join users u on u.id = t.user_id left join markets m on m.id = t.home_market_id order by u.full_name`,
+     sql`select r.id, r.kind, r.note, r.created_at, r.from_date::text, r.to_date::text, r.total_before, r.total_after, r.removed_addons, r.payload, r.before,
+diff --git a/src/app/admin/people/list.tsx b/src/app/admin/people/list.tsx
+index f2c5d59..ab25e53 100644
+--- a/src/app/admin/people/list.tsx
++++ b/src/app/admin/people/list.tsx
+@@ -1,19 +1,20 @@
+ "use client";
+ import * as React from "react";
++import { SKILLS, skillPerson, skillsLine } from "@/lib/skills";
+ import Link from "next/link";
+ import { useRouter } from "next/navigation";
+ import {
+-  UserCheck, UserX, Ban, RotateCcw, KeyRound, Shuffle, ExternalLink, ShieldCheck, ShieldAlert, Camera, Video, Copy, Users, MoreHorizontal, Star, AlertTriangle, AtSign as Instagram,
++  UserCheck, UserX, Ban, RotateCcw, KeyRound, Shuffle, ExternalLink, ShieldCheck, ShieldAlert, Camera, Video, Smartphone, Copy, Users, MoreHorizontal, Star, AlertTriangle, AtSign as Instagram,
+ } from "lucide-react";
+-import { Card, Button, Badge, StatusBadge, Avatar, EmptyState, Field, Textarea, Select, Alert, DescList } from "@/components/ui";
++import { Card, Button, Badge, StatusBadge, Avatar, EmptyState, Field, Textarea, Select, Alert, DescList, Checkbox } from "@/components/ui";
+ import { Modal, Menu, MenuItem, useAction, useToast } from "@/components/ui/interactive";
+-import { approveApplicantAction, rejectApplicantAction, suspendUserAction, reactivateUserAction, changeRoleAction, resetPasswordAction } from "@/lib/actions/people";
++import { approveApplicantAction, rejectApplicantAction, suspendUserAction, reactivateUserAction, changeRoleAction, resetPasswordAction, setSkillsAction } from "@/lib/actions/people";
+ import { fmtDate, ago, cn } from "@/lib/utils";
+ 
+ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+ type P = Record<string, any>;
+ type Tab = "applicants" | "team" | "clients" | "staff";
+-const ROLE: Record<string, string> = { photographer: "Photographer", videographer: "Videographer", coordinator: "Coordinator", admin: "Administrator", client: "Client" };
++const ROLE: Record<string, string> = { freelancer: "Freelancer", coordinator: "Coordinator", admin: "Administrator", client: "Client" };
+ const DOC: Record<string, string> = { drivers_license: "Driver's license", insurance: "Liability insurance", w9: "W-9", business_license: "Business license", other: "Other" };
+ 
+ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: string; role: string } }) {
+@@ -24,10 +25,11 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+   const [dlg, setDlg] = React.useState<{ kind: "reject" | "suspend" | "role"; p: P } | null>(null);
+   const [text, setText] = React.useState("");
+   const [role, setRole] = React.useState("");
++  const [skills, setSkills] = React.useState<string[]>([]);
+   const [temp, setTemp] = React.useState<{ name: string; email: string; password: string } | null>(null);
+   const done = () => { setDlg(null); setView(null); router.refresh(); };
+   const canManage = (p: P) => p.user_id !== me.id && (me.role === "admin" || !["coordinator", "admin"].includes(p.role));
+-  const open = (kind: "reject" | "suspend" | "role", p: P) => { setText(""); setRole(kind === "role" ? roleOptions(p, me)[0] ?? "" : ""); setDlg({ kind, p }); };
++  const open = (kind: "reject" | "suspend" | "role", p: P) => { setText(""); setRole(kind === "role" ? roleOptions(p, me)[0] ?? "" : ""); setSkills(p.skills ?? []); setDlg({ kind, p }); };
+   const reset = (p: P) => run(async () => {
+     const r = await resetPasswordAction(p.user_id);
+     if (r.ok && r.data) setTemp({ name: p.full_name, email: p.email, password: r.data.temp });
+@@ -35,7 +37,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+   });
+ 
+   if (!rows.length)
+-    return <Card><EmptyState icon={Users} title={tab === "applicants" ? "No applications waiting" : "Nobody here yet"} description={tab === "applicants" ? "New photographer and videographer applications from /join show up here." : undefined} /></Card>;
++    return <Card><EmptyState icon={Users} title={tab === "applicants" ? "No applications waiting" : "Nobody here yet"} description={tab === "applicants" ? "New applications from /join (photographers, videographers and content creators) show up here." : undefined} /></Card>;
+ 
+   return (
+     <>
+@@ -48,7 +50,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+                 <p className="font-semibold text-ink">{p.full_name}</p>
+                 <p className="truncate text-[13px] text-muted">{p.email} · {p.phone}</p>
+                 <div className="mt-1.5 flex flex-wrap gap-1.5">
+-                  <Badge tone={p.discipline === "photo" ? "blush" : "info"}>{p.discipline === "photo" ? <Camera className="size-3" /> : <Video className="size-3" />}{p.discipline === "photo" ? "Photographer" : "Videographer"}</Badge>
++                  <SkillBadges skills={p.skills} />
+                   <Badge>{p.years_experience} yrs</Badge>{p.city && <Badge>{p.city}, {p.state}</Badge>}
+                   <DocsBadge p={p} />
+                 </div>
+@@ -77,7 +79,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+                     <p className="truncate text-[13px] text-muted">{p.email}{tab === "team" && p.city ? ` · ${p.city}, ${p.state}` : ""}{tab === "clients" && p.next_wedding ? ` · wedding ${fmtDate(p.next_wedding)}` : ""}</p>
+                   </button>
+                   <div className="flex flex-wrap items-center gap-1.5">
+-                    <Badge>{ROLE[p.role]}</Badge>
++                    {p.role === "freelancer" ? <SkillBadges skills={p.skills} /> : <Badge>{ROLE[p.role]}</Badge>}
+                     {p.account_status === "suspended" ? <StatusBadge status="suspended" /> : tab === "team" && p.member_status !== "active" ? <StatusBadge status={p.member_status} /> : null}
+                     {tab === "team" && <DocsBadge p={p} />}
+                     {tab === "team" && p.late_cancels > 0 && <Badge tone="danger">{p.late_cancels} late cancel{p.late_cancels > 1 ? "s" : ""}</Badge>}
+@@ -94,7 +96,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+       </div>
+ 
+       {/* Person details */}
+-      <Modal open={!!view} onClose={() => setView(null)} size="lg" title={view?.full_name} description={view ? `${ROLE[view.role]} · joined ${fmtDate(view.created_at)}` : ""}
++      <Modal open={!!view} onClose={() => setView(null)} size="lg" title={view?.full_name} description={view ? `${view.role === "freelancer" ? skillsLine(view.skills) : ROLE[view.role]} · joined ${fmtDate(view.created_at)}` : ""}
+         icon={view ? <Avatar name={view.full_name} src={view.avatar_url} size={44} /> : undefined}
+         footer={view && canManage(view) ? <div className="flex w-full flex-wrap justify-end gap-2">
+           {view.member_status === "applicant" && <><Button variant="outline" icon={UserX} onClick={() => open("reject", view)}>Decline</Button><Button icon={UserCheck} loading={pending} onClick={() => run(() => approveApplicantAction(view.user_id), { onSuccess: done })}>Approve</Button></>}
+@@ -109,7 +111,7 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+ 
+       {/* Decline application / suspend / change role */}
+       <Modal open={!!dlg} onClose={() => setDlg(null)} size="sm"
+-        title={dlg?.kind === "reject" ? "Decline application" : dlg?.kind === "suspend" ? "Suspend account" : "Change role"}
++        title={dlg?.kind === "reject" ? "Decline application" : dlg?.kind === "suspend" ? "Suspend account" : dlg?.p.role === "freelancer" ? "Edit skills" : "Change role"}
+         description={dlg?.p.full_name}
+         footer={<><Button variant="outline" onClick={() => setDlg(null)}>Cancel</Button>
+           <Button variant={dlg?.kind === "role" ? "primary" : "danger"} loading={pending} onClick={() => {
+@@ -117,13 +119,22 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+             const id = dlg.p.user_id;
+             if (dlg.kind === "reject") run(() => rejectApplicantAction(id, text), { onSuccess: done });
+             else if (dlg.kind === "suspend") run(() => suspendUserAction(id, text), { onSuccess: done });
++            else if (dlg.p.role === "freelancer") run(() => setSkillsAction(id, skills), { onSuccess: done });
+             else run(() => changeRoleAction(id, role), { onSuccess: done });
+-          }}>{dlg?.kind === "reject" ? "Decline" : dlg?.kind === "suspend" ? "Suspend" : "Change role"}</Button></>}>
+-        {dlg?.kind === "role" ? (
++          }}>{dlg?.kind === "reject" ? "Decline" : dlg?.kind === "suspend" ? "Suspend" : dlg?.p.role === "freelancer" ? "Save skills" : "Change role"}</Button></>}>
++        {dlg?.kind === "role" && dlg.p.role === "freelancer" ? (
++          <div className="space-y-2 text-sm">
++            {SKILLS.map((s) => (
++              <Checkbox key={s.value} label={s.person} checked={skills.includes(s.value)}
++                onChange={() => setSkills((x) => (x.includes(s.value) ? x.filter((v) => v !== s.value) : [...x, s.value]))} />
++            ))}
++            <p className="pt-1 text-muted">They can request jobs for every skill ticked here. A skill they&apos;re booked for upcoming can&apos;t be removed until those weddings are done or reassigned.</p>
++          </div>
++        ) : dlg?.kind === "role" ? (
+           roleOptions(dlg.p, me).length ? (
+             <div className="space-y-3 text-sm">
+               <Field label="New role"><Select value={role} onChange={(e) => setRole(e.target.value)}>{roleOptions(dlg.p, me).map((r) => <option key={r} value={r}>{ROLE[r]}</option>)}</Select></Field>
+-              <p className="text-muted">They&apos;ll be signed out and see the new role next time they log in.{["photographer", "videographer"].includes(dlg.p.role) ? " Their upcoming weddings must be reassigned first." : ""}</p>
++              <p className="text-muted">They&apos;ll be signed out and see the new role next time they log in.{["freelancer"].includes(dlg.p.role) ? " Their upcoming weddings must be reassigned first." : ""}</p>
+             </div>
+           ) : <p className="text-sm text-muted">There&apos;s no other role this account can move to.</p>
+         ) : (
+@@ -153,8 +164,15 @@ export function PeopleList({ tab, rows, me }: { tab: Tab; rows: P[]; me: { id: s
+   );
+ }
+ 
++function SkillBadges({ skills }: { skills: string[] | null }) {
++  return <>{(skills ?? []).map((s) => {
++    const I = s === "photo" ? Camera : s === "video" ? Video : Smartphone;
++    return <Badge key={s} tone={s === "photo" ? "blush" : s === "video" ? "info" : "warning"}><I className="size-3" />{skillPerson(s)}</Badge>;
++  })}</>;
++}
++
+ function roleOptions(p: P, me: { role: string }) {
+-  if (["photographer", "videographer"].includes(p.role)) return ["photographer", "videographer"].filter((r) => r !== p.role);
++  if (p.role === "freelancer") return ["skills"];
+   if (["coordinator", "admin"].includes(p.role) && me.role === "admin") return ["coordinator", "admin"].filter((r) => r !== p.role);
+   return [];
+ }
+@@ -170,7 +188,7 @@ function PersonMenu({ p, me, onSuspend, onReactivate, onRole, onReset }: { p: P;
+     <Menu trigger={({ toggle }) => <Button variant="ghost" size="icon" onClick={toggle} aria-label={`Manage ${p.full_name}`}><MoreHorizontal className="size-5" /></Button>}>
+       {(close) => (
+         <>
+-          {roleOptions(p, me).length > 0 && <MenuItem icon={Shuffle} onClick={() => { close(); onRole(); }}>Change role</MenuItem>}
++          {roleOptions(p, me).length > 0 && <MenuItem icon={Shuffle} onClick={() => { close(); onRole(); }}>{p.role === "freelancer" ? "Edit skills" : "Change role"}</MenuItem>}
+           <MenuItem icon={KeyRound} onClick={() => { close(); onReset(); }}>Reset password</MenuItem>
+           {p.account_status === "suspended" ? <MenuItem icon={RotateCcw} onClick={() => { close(); onReactivate(); }}>Reactivate</MenuItem>
+             : <MenuItem icon={Ban} danger onClick={() => { close(); onSuspend(); }}>Suspend</MenuItem>}
+diff --git a/src/app/admin/weddings/[id]/client-messages.tsx b/src/app/admin/weddings/[id]/client-messages.tsx
+index 6946eaa..38550f7 100644
+--- a/src/app/admin/weddings/[id]/client-messages.tsx
++++ b/src/app/admin/weddings/[id]/client-messages.tsx
+@@ -47,7 +47,7 @@ export function ClientMessages({ weddingId, couple, firstName, threads, canMessa
+         </ul>
+       )}
+       <Modal open={open} onClose={() => setOpen(false)} title={`Message ${couple}`}
+-        description="Starts a new conversation between you and the couple. You can loop in their photographer or videographer from the conversation later."
++        description="Starts a new conversation between you and the couple. You can loop in their photographer, videographer or content creator from the conversation later."
+         footer={<><Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button><Button icon={Send} loading={pending} onClick={send}>Send message</Button></>}>
+         <div className="space-y-4">
+           <Field label="Subject" error={errors.subject}><Input value={subject} onChange={(e) => setSubject(e.target.value)} aria-invalid={!!errors.subject} /></Field>
+diff --git a/src/app/admin/weddings/[id]/footage.tsx b/src/app/admin/weddings/[id]/footage.tsx
+index c8e6edb..434d33a 100644
+--- a/src/app/admin/weddings/[id]/footage.tsx
++++ b/src/app/admin/weddings/[id]/footage.tsx
+@@ -1,7 +1,7 @@
+ "use client";
+ import * as React from "react";
+ import { useRouter } from "next/navigation";
+-import { Film, Image as ImageIcon, Bookmark, Download, Tag, Mic, FolderOpen } from "lucide-react";
++import { Film, Smartphone, Image as ImageIcon, Bookmark, Download, Tag, Mic, FolderOpen } from "lucide-react";
+ import { Card, CardHeader, Badge, EmptyState, Select } from "@/components/ui";
+ import { useAction } from "@/components/ui/interactive";
+ import { MarkersModal, type Marker } from "@/components/uploads/markers-modal";
+@@ -10,7 +10,7 @@ import { MOMENTS, MIXED, SOURCE_LABEL, momentLabel, isAudioSource } from "@/cont
+ import { bytes, duration, cn } from "@/lib/utils";
+ 
+ type Row = {
+-  id: string; kind: "photo" | "video"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
++  id: string; kind: "photo" | "video" | "content"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
+   size_bytes: number; status: string; duration_seconds: number | null; uploader: string; markers: Marker[]; downloadable: boolean;
+ };
+ 
+@@ -21,7 +21,7 @@ export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLab
+   const router = useRouter();
+   const { run } = useAction();
+   const [markersFor, setMarkersFor] = React.useState<Row | null>(null);
+-  const [kind, setKind] = React.useState<"all" | "photo" | "video">("all");
++  const [kind, setKind] = React.useState<"all" | "photo" | "video" | "content">("all");
+ 
+   const shown = rows.filter((r) => kind === "all" || r.kind === kind);
+   const groups = new Map<string, Row[]>();
+@@ -34,10 +34,10 @@ export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLab
+   return (
+     <Card className="overflow-hidden">
+       <CardHeader title="Footage & photos"
+-        subtitle={rows.length ? `${rows.filter((r) => r.kind === "video").length} video/audio · ${rows.filter((r) => r.kind === "photo").length} photo files · ${bytes(total)} · ${markerCount} markers · ${providerLabel}` : providerLabel}
++        subtitle={rows.length ? `${rows.filter((r) => r.kind === "video").length} video/audio · ${rows.filter((r) => r.kind === "photo").length} photo · ${rows.filter((r) => r.kind === "content").length} content files · ${bytes(total)} · ${markerCount} markers · ${providerLabel}` : providerLabel}
+         action={rows.length > 0 ? (
+           <div className="flex gap-1 rounded-full bg-midnight-50 p-1 text-[12px] font-medium">
+-            {(["all", "video", "photo"] as const).map((k) => (
++            {(["all", "video", "photo", "content"] as const).map((k) => (
+               <button key={k} onClick={() => setKind(k)} className={cn("rounded-full px-3 py-1 capitalize", kind === k ? "bg-white text-ink shadow-sm" : "text-midnight-600")}>{k}</button>
+             ))}
+           </div>
+@@ -60,7 +60,7 @@ export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLab
+                   {list.map((r) => (
+                     <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl px-2 py-1.5 text-[13px] hover:bg-canvas">
+                       <span className="flex min-w-0 flex-1 basis-56 items-center gap-2">
+-                        {r.kind === "photo" ? <ImageIcon className="size-4 shrink-0 text-midnight-300" /> : isAudioSource(r.source) ? <Mic className="size-4 shrink-0 text-midnight-300" /> : <Film className="size-4 shrink-0 text-midnight-300" />}
++                        {r.kind === "photo" ? <ImageIcon className="size-4 shrink-0 text-midnight-300" /> : r.kind === "content" ? <Smartphone className="size-4 shrink-0 text-midnight-300" /> : isAudioSource(r.source) ? <Mic className="size-4 shrink-0 text-midnight-300" /> : <Film className="size-4 shrink-0 text-midnight-300" />}
+                         <span className="truncate font-medium text-ink">{r.filename}</span>
+                       </span>
+                       <span className="w-40 truncate text-muted">{r.uploader}{r.source ? ` · ${SOURCE_LABEL[r.source] ?? r.source}` : ""}</span>
+@@ -69,11 +69,11 @@ export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLab
+                       <Select aria-label={`Moment for ${r.filename}`} value={r.moment ?? ""} className="h-8 w-40 text-[12px]"
+                         onChange={(e) => run(() => retagUploadAction(r.id, { moment: e.target.value }), { onSuccess: () => router.refresh() })}>
+                         {!r.moment && <option value="" disabled>Untagged</option>}
+-                        {r.kind === "photo" && <option value={MIXED.value}>{MIXED.label}</option>}
++                        {r.kind !== "video" && <option value={MIXED.value}>{MIXED.label}</option>}
+                         {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                       </Select>
+                       <span className="w-20">
+-                        {r.kind === "video" && (
++                        {r.kind !== "photo" && (
+                           <button onClick={() => setMarkersFor(r)} aria-label={`Markers for ${r.filename}`} className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium text-midnight-700 ring-1 ring-line hover:bg-white">
+                             <Bookmark className="size-3.5" />{r.markers.length}{r.camera_markers && <span className="text-blush-600">+cam</span>}
+                           </button>
+@@ -90,7 +90,7 @@ export function FootagePanel({ rows, providerLabel }: { rows: Row[]; providerLab
+           })}
+         </div>
+       )}
+-      <MarkersModal open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
++      <MarkersModal key={markersFor?.id ?? "none"} open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
+     </Card>
+   );
+ }
+diff --git a/src/app/team/application.tsx b/src/app/team/application.tsx
+index f7d25c0..8cfe9ef 100644
+--- a/src/app/team/application.tsx
++++ b/src/app/team/application.tsx
+@@ -1,4 +1,5 @@
+ import { CheckCircle2, Circle, Clock, XCircle, ShieldCheck, UserRound, BookOpen } from "lucide-react";
++import { skillsLine } from "@/lib/skills";
+ import { Card, CardBody, ButtonLink, Alert } from "@/components/ui";
+ import { licenses, profileCompletion, REQUIRED_DOCS, type Member } from "@/lib/services/team";
+ import { fmtDate } from "@/lib/utils";
+@@ -20,7 +21,7 @@ export async function ApplicationStatus({ member }: { member: Member }) {
+   return (
+     <div className="mx-auto max-w-3xl space-y-6">
+       <div>
+-        <p className="text-sm text-muted">{member.discipline === "photo" ? "Photographer" : "Videographer"} application</p>
++        <p className="text-sm text-muted">{skillsLine(member.skills)} application</p>
+         <h2 className="text-2xl font-semibold text-ink">{rejected ? "Thanks for applying" : `Welcome, ${member.full_name.split(" ")[0]}.`}</h2>
+       </div>
+       {rejected ? (
+diff --git a/src/app/team/handbook/icons.ts b/src/app/team/handbook/icons.ts
+index 63d0e4d..ffd8314 100644
+--- a/src/app/team/handbook/icons.ts
++++ b/src/app/team/handbook/icons.ts
+@@ -1,2 +1,2 @@
+-import { Rocket, ShieldCheck, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen, type LucideIcon } from "lucide-react";
+-export const HB_ICONS: Record<string, LucideIcon> = { Rocket, ShieldCheck, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen };
++import { Rocket, ShieldCheck, Smartphone, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen, type LucideIcon } from "lucide-react";
++export const HB_ICONS: Record<string, LucideIcon> = { Rocket, ShieldCheck, Smartphone, BadgeCheck, Camera, Video, CalendarClock, MessagesSquare, Package, Aperture, Clapperboard, UploadCloud, Shirt, Clock, Siren, Wallet, CircleHelp, FolderOpen, LifeBuoy, BookOpen };
+diff --git a/src/app/team/handbook/index-view.tsx b/src/app/team/handbook/index-view.tsx
+index 1a9b0b1..33a50be 100644
+--- a/src/app/team/handbook/index-view.tsx
++++ b/src/app/team/handbook/index-view.tsx
+@@ -1,5 +1,6 @@
+ "use client";
+ import * as React from "react";
++import { skillPerson } from "@/lib/skills";
+ import Link from "next/link";
+ import { Search, BookOpen, Clock, ArrowRight, Siren } from "lucide-react";
+ import { Card, Input, Badge, EmptyState } from "@/components/ui";
+@@ -9,10 +10,10 @@ import { cn } from "@/lib/utils";
+ 
+ type Tree = { id: string; slug: string; title: string; description: string; icon: string; articles: { slug: string; title: string; summary: string; audience: string; read_minutes: number; updated_at: string }[] }[];
+ 
+-export function HandbookIndex({ tree, discipline }: { tree: Tree; discipline: "photo" | "video" }) {
++export function HandbookIndex({ tree, skills }: { tree: Tree; skills: string[] }) {
+   const [q, setQ] = React.useState("");
+   const [aud, setAud] = React.useState<"mine" | "all">("mine");
+-  const show = (a: Tree[number]["articles"][number]) => aud === "all" || a.audience === "all" || a.audience === discipline;
++  const show = (a: Tree[number]["articles"][number]) => aud === "all" || a.audience === "all" || skills.includes(a.audience);
+   const matches = q.trim().length > 1 ? tree.flatMap((c) => c.articles.filter((a) => show(a) && `${a.title} ${a.summary}`.toLowerCase().includes(q.toLowerCase())).map((a) => ({ ...a, cat: c.title }))) : null;
+   const recent = tree.flatMap((c) => c.articles.filter(show).map((a) => ({ ...a, cat: c.title }))).sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 4);
+   const total = tree.reduce((s, c) => s + c.articles.filter(show).length, 0);
+@@ -32,7 +33,7 @@ export function HandbookIndex({ tree, discipline }: { tree: Tree; discipline: "p
+       </div>
+ 
+       <div className="flex flex-wrap items-center justify-between gap-3">
+-        <Tabs value={aud} onChange={setAud} items={[{ value: "mine", label: discipline === "photo" ? "For photographers" : "For videographers" }, { value: "all", label: "All articles" }]} />
++        <Tabs value={aud} onChange={setAud} items={[{ value: "mine", label: skills.length === 1 ? `For ${skillPerson(skills[0]).toLowerCase()}s` : "For your skills" }, { value: "all", label: "All articles" }]} />
+         <Link href="/team/handbook/emergencies" className="inline-flex items-center gap-2 rounded-full bg-danger-50 px-4 py-2 text-sm font-medium text-danger-700 hover:bg-danger-50/70"><Siren className="size-4" />Emergency procedures</Link>
+       </div>
+ 
+diff --git a/src/app/team/handbook/page.tsx b/src/app/team/handbook/page.tsx
+index 2959b7f..9313642 100644
+--- a/src/app/team/handbook/page.tsx
++++ b/src/app/team/handbook/page.tsx
+@@ -7,5 +7,5 @@ export const metadata = { title: "Team Handbook" };
+ export default async function HandbookPage() {
+   const { member } = await currentMember();
+   const tree = await handbookTree();
+-  return <HandbookIndex discipline={member.discipline} tree={tree.map((c) => ({ ...c, articles: c.articles.map((a) => ({ ...a, updated_at: new Date(a.updated_at).toISOString() })) }))} />;
++  return <HandbookIndex skills={member.skills} tree={tree.map((c) => ({ ...c, articles: c.articles.map((a) => ({ ...a, updated_at: new Date(a.updated_at).toISOString() })) }))} />;
+ }
+diff --git a/src/app/team/layout.tsx b/src/app/team/layout.tsx
+index 520276e..a8b22ef 100644
+--- a/src/app/team/layout.tsx
++++ b/src/app/team/layout.tsx
+@@ -3,10 +3,11 @@ import { requireUser } from "@/lib/auth";
+ import { getMember, opportunities, licenses, REQUIRED_DOCS } from "@/lib/services/team";
+ import { standardsAcceptance } from "@/lib/services/standards";
+ import { listNotifications, unreadCounts } from "@/lib/services/notifications";
++import { skillsLine } from "@/lib/skills";
+ import { AppShell, type NavGroup } from "@/components/shell/app-shell";
+ 
+ export default async function TeamLayout({ children }: { children: React.ReactNode }) {
+-  const user = await requireUser(["photographer", "videographer"], "/team");
++  const user = await requireUser(["freelancer"], "/team");
+   const member = await getMember(user.id);
+   if (!member) redirect("/login");
+   const active = member.status === "active";
+@@ -17,7 +18,6 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+     const docs = lic.filter((l) => l.doc_type === d.type);
+     return !docs.some((l) => ["verified", "pending_review"].includes(l.effective as string));
+   }).length + lic.filter((l) => l.effective === "expiring_soon").length;
+-  const isVideo = member.discipline === "video";
+ 
+   const nav: NavGroup[] = !active ? [
+     { items: [{ href: "/team", label: "Application", icon: "ClipboardList" }] },
+@@ -36,7 +36,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+       { href: "/team/open", label: "Open Weddings", icon: "Sparkles", badge: openCount },
+       { href: "/team/availability", label: "Availability", icon: "CalendarDays" },
+       { href: "/team/messages", label: "Messages", icon: "MessageCircle", badge: counts.messages },
+-      { href: isVideo ? "/team/uploads/video" : "/team/uploads", label: isVideo ? "Video Uploads" : "Photo Uploads", icon: isVideo ? "Film" : "Images", match: ["/team/uploads"] },
++      { href: "/team/uploads", label: "Uploads", icon: "UploadCloud", match: ["/team/uploads"] },
+       { href: "/team/payments", label: "Payments", icon: "Wallet" },
+     ] },
+     { title: "Resources", items: [
+@@ -50,7 +50,7 @@ export default async function TeamLayout({ children }: { children: React.ReactNo
+   ];
+   return (
+     <AppShell nav={nav} base="/team" oncall settingsHref="/team/settings" profileHref="/team/profile"
+-      user={{ name: member.full_name, email: member.email, avatar: member.avatar_url, roleLabel: `${isVideo ? "Videographer" : "Photographer"}${active ? "" : member.status === "rejected" ? " · not approved" : " · applicant"}` }}
++      user={{ name: member.full_name, email: member.email, avatar: member.avatar_url, roleLabel: `${skillsLine(member.skills)}${active ? "" : member.status === "rejected" ? " · not approved" : " · applicant"}` }}
+       notifications={notes.map((n) => ({ ...n, created_at: String(n.created_at), read_at: n.read_at ? String(n.read_at) : null })) as never}
+       unread={counts.notifications}>
+       {children}
+diff --git a/src/app/team/open/board.tsx b/src/app/team/open/board.tsx
+index 929be6e..e495ada 100644
+--- a/src/app/team/open/board.tsx
++++ b/src/app/team/open/board.tsx
+@@ -1,11 +1,12 @@
+ "use client";
+ 
+ import * as React from "react";
++import { SKILLS, skillForRole, skillPerson, type Skill } from "@/lib/skills";
+ import Link from "next/link";
+ import { useRouter } from "next/navigation";
+ import {
+   CalendarDays, Clock, MapPin, Camera, Video, Navigation, CircleDollarSign, Users, AlertTriangle, CheckCircle2, Search, SlidersHorizontal,
+-  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert,
++  Timer, Sparkles, XCircle, Undo2, ArrowRight, Info, FileSignature, Gift, Route, ShieldAlert, Smartphone,
+ } from "lucide-react";
+ import { Button, ButtonLink, StatusBadge, Badge, Select, Input, EmptyState, Alert, Field, Textarea } from "@/components/ui";
+ import { Modal, Tabs, useAction, useToast } from "@/components/ui/interactive";
+@@ -19,7 +20,7 @@ import type { Opportunity } from "@/lib/services/team";
+ type Item = Omit<Opportunity, "expires_at"> & { expires_at: string | null };
+ type Tab = "offered" | "available" | "pending" | "accepted" | "closed" | "declined";
+ 
+-export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; discipline: "photo" | "video"; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
++export function OpenWeddingsBoard({ items, skills, homeCity, homeLabel, memberName, initialId, standardsAccepted = true }: { items: Item[]; skills: string[]; homeCity: string; homeLabel: string; memberName: string; initialId?: string; standardsAccepted?: boolean }) {
+   const router = useRouter();
+   const toast = useToast();
+   const { run, pending } = useAction();
+@@ -28,7 +29,9 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+     return init?.view_status === "offered" ? "offered" : init?.view_status === "pending" ? "pending" : items.some((i) => i.view_status === "offered") ? "offered" : "available";
+   });
+   const [q, setQ] = React.useState("");
+-  const [service, setService] = React.useState<"all" | "photo" | "video">(discipline);
++  // "mine" = every role my skills cover; or narrow to one skill / everything
++  const [service, setService] = React.useState<"mine" | "all" | Skill>("mine");
++  const serviceMatch = (i: Item) => service === "all" || (service === "mine" ? i.eligible : skillForRole(i.role) === service);
+   const [role, setRole] = React.useState<"all" | "lead" | "second">("all");
+   const [month, setMonth] = React.useState("all");
+   const [maxMiles, setMaxMiles] = React.useState("any");
+@@ -44,7 +47,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+   const [success, setSuccess] = React.useState<{ item: Item; status: string; weddingId: string } | null>(null);
+ 
+   const bucket = (i: Item): Tab => i.view_status === "available" ? "available" : i.view_status === "offered" ? "offered" : i.view_status === "pending" ? "pending" : i.view_status === "accepted" ? "accepted" : i.view_status === "declined" ? "declined" : "closed";
+-  const counts = items.filter((i) => service === "all" || i.role.endsWith(service) || i.view_status === "offered")
++  const counts = items.filter((i) => serviceMatch(i) || i.view_status === "offered")
+     .reduce((acc, i) => { acc[bucket(i)]++; return acc; }, { offered: 0, available: 0, pending: 0, accepted: 0, closed: 0, declined: 0 } as Record<Tab, number>);
+   const miles = (i: Item) => i.distance?.miles ?? null;
+   const months = [...new Set(items.map((i) => i.wedding_date.slice(0, 7)))].sort();
+@@ -53,7 +56,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+ 
+   const filtered = items
+     .filter((i) => bucket(i) === tab)
+-    .filter((i) => service === "all" || i.role.endsWith(service) || tab === "offered")
++    .filter((i) => serviceMatch(i) || tab === "offered")
+     .filter((i) => role === "all" || i.role.startsWith(role))
+     .filter((i) => month === "all" || i.wedding_date.startsWith(month))
+     .filter((i) => city === "all" || `${i.city}, ${i.state}` === city)
+@@ -62,8 +65,8 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+     .filter((i) => !q || `${i.couple} ${i.venue_name} ${i.city}`.toLowerCase().includes(q.toLowerCase()))
+     .sort((a, b) => sort === "pay" ? b.compensation - a.compensation : sort === "distance" ? (miles(a) ?? 1e9) - (miles(b) ?? 1e9) : a.wedding_date.localeCompare(b.wedding_date));
+ 
+-  const activeFilters = [service !== discipline, role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
+-  const reset = () => { setService(discipline); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
++  const activeFilters = [service !== "mine", role !== "all", month !== "all", city !== "all", maxMiles !== "any", minPay !== "0"].filter(Boolean).length;
++  const reset = () => { setService("mine"); setRole("all"); setMonth("all"); setCity("all"); setMaxMiles("any"); setMinPay("0"); setQ(""); };
+ 
+   // The team standards must be accepted before signing for any wedding.
+   const startSign = (i: Item) => {
+@@ -115,7 +118,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+ 
+       {showFilters && (
+         <div className="card mb-5 grid gap-4 p-5 animate-pop-in sm:grid-cols-2 lg:grid-cols-6">
+-          <Field label="Service"><Select value={service} onChange={(e) => setService(e.target.value as typeof service)}><option value="all">All services</option><option value="photo">Photography</option><option value="video">Videography</option></Select></Field>
++          <Field label="Service"><Select value={service} onChange={(e) => setService(e.target.value as typeof service)}><option value="mine">Jobs for my skills</option><option value="all">All jobs</option>{SKILLS.map((s) => <option key={s.value} value={s.value}>{s.label}{skills.includes(s.value) ? "" : " (not on your profile)"}</option>)}</Select></Field>
+           <Field label="Role"><Select value={role} onChange={(e) => setRole(e.target.value as typeof role)}><option value="all">Lead & second</option><option value="lead">Lead only</option><option value="second">Second only</option></Select></Field>
+           <Field label="Date"><Select value={month} onChange={(e) => setMonth(e.target.value)}><option value="all">Any month</option>{months.map((m) => <option key={m} value={m}>{fmtDate(m + "-01", "MMMM yyyy")}</option>)}</Select></Field>
+           <Field label="Location"><Select value={city} onChange={(e) => setCity(e.target.value)}><option value="all">All locations</option>{cities.map((c) => <option key={c}>{c}</option>)}</Select></Field>
+@@ -129,7 +132,7 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+         <div className="card">
+           <EmptyState icon={tab === "available" ? Sparkles : CalendarDays}
+             title={tab === "available" ? "No open weddings match" : `No ${tab === "closed" ? "expired or filled" : tab} weddings`}
+-            description={activeFilters || q ? "Try widening your filters." : tab === "available" ? "We'll notify you as soon as a new wedding needs your discipline." : undefined}
++            description={activeFilters || q ? "Try widening your filters." : tab === "available" ? "We'll notify you as soon as a new wedding needs one of your skills." : undefined}
+             action={activeFilters || q ? <Button variant="outline" onClick={reset}>Clear filters</Button> : undefined} />
+         </div>
+       ) : (
+@@ -225,7 +228,8 @@ export function OpenWeddingsBoard({ items, discipline, homeCity, homeLabel, memb
+ }
+ 
+ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithdraw, pending }: { item: Item; onView: () => void; onAccept: () => void; onDecline: () => void; onUndo: () => void; onWithdraw: () => void; pending: boolean }) {
+-  const isPhoto = i.role.endsWith("photo");
++  const skill = skillForRole(i.role);
++  const SkillIcon = skill === "photo" ? Camera : skill === "video" ? Video : Smartphone;
+   const closingSoon = i.view_status === "available" && i.expires_at && new Date(i.expires_at).getTime() - Date.now() < 7 * 86400000;
+   const open = i.view_status === "available" || i.view_status === "offered";
+   const muted = ["expired", "filled", "declined"].includes(i.view_status);
+@@ -244,7 +248,7 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
+           </div>
+           <p className="mt-0.5 truncate text-[13px] text-muted">{i.venue_name}</p>
+           <div className="mt-2 flex flex-wrap gap-1.5">
+-            <Badge tone={isPhoto ? "blush" : "info"}>{isPhoto ? <Camera className="size-3" /> : <Video className="size-3" />}{ROLE_LABEL[i.role]}</Badge>
++            <Badge tone={skill === "photo" ? "blush" : skill === "video" ? "info" : "warning"}><SkillIcon className="size-3" />{ROLE_LABEL[i.role]}</Badge>
+             {closingSoon && <Badge tone="warning"><Timer className="size-3" />Closes {ago(i.expires_at!)}</Badge>}
+             {open && (i.distance?.miles ?? 0) > LONG_DISTANCE_MILES && <Badge><Route className="size-3" />Long-distance</Badge>}
+           </div>
+@@ -261,7 +265,7 @@ function OpportunityCard({ item: i, onView, onAccept, onDecline, onUndo, onWithd
+         <ul className="mt-2 flex flex-wrap gap-1.5">{i.requirements.map((r) => <li key={r} className="rounded-lg bg-midnight-50 px-2 py-1 text-[12px] text-midnight-600">{r}</li>)}</ul>
+         {open && i.conflict && <p className="mt-3 flex items-center gap-1.5 text-[12px] font-medium text-danger-500"><AlertTriangle className="size-3.5" />You&apos;re already booked this day</p>}
+         {open && !i.conflict && i.calendar && i.calendar !== "available" && <p className="mt-3 flex items-center gap-1.5 text-[12px] font-medium text-warning-700"><AlertTriangle className="size-3.5" />Marked {i.calendar} on your calendar</p>}
+-        {!i.eligible && i.view_status === "available" && <p className="mt-3 text-[12px] text-muted">Open to {i.role.endsWith("photo") ? "photographers" : "videographers"} only.</p>}
++        {!i.eligible && i.view_status === "available" && <p className="mt-3 text-[12px] text-muted">Open to {skillPerson(skill).toLowerCase()}s — add it to the skills on your <Link href="/team/profile" className="underline">profile</Link> to request it.</p>}
+       </div>
+       <div className="flex gap-2 px-5 pb-5">
+         {open && (
+diff --git a/src/app/team/open/page.tsx b/src/app/team/open/page.tsx
+index 8969bb3..5b225b3 100644
+--- a/src/app/team/open/page.tsx
++++ b/src/app/team/open/page.tsx
+@@ -16,7 +16,7 @@ export default async function OpenWeddingsPage({ searchParams }: { searchParams:
+   return (
+     <OpenWeddingsBoard
+       initialId={sp.id}
+-      discipline={member.discipline}
++      skills={member.skills}
+       homeCity={member.city ?? ""}
+       homeLabel={member.lat != null ? "your home base" : member.city ? `${member.city} (add your home address in Profile for exact distances)` : "your home market"}
+       memberName={member.full_name}
+diff --git a/src/app/team/page.tsx b/src/app/team/page.tsx
+index e814ab9..c59f858 100644
+--- a/src/app/team/page.tsx
++++ b/src/app/team/page.tsx
+@@ -95,7 +95,7 @@ export default async function TeamOverview() {
+                 <Card className="grid place-items-center p-6 text-center">
+                   <div>
+                     <p className="font-medium text-ink">Room for one more?</p>
+-                    <p className="mt-1 text-sm text-muted">{open.length} open weddings match your discipline.</p>
++                    <p className="mt-1 text-sm text-muted">{open.length} open weddings match your skills.</p>
+                     <ButtonLink href="/team/open" variant="outline" size="sm" className="mt-4">Browse</ButtonLink>
+                   </div>
+                 </Card>
+diff --git a/src/app/team/profile/form.tsx b/src/app/team/profile/form.tsx
+index 931469e..768381f 100644
+--- a/src/app/team/profile/form.tsx
++++ b/src/app/team/profile/form.tsx
+@@ -1,16 +1,17 @@
+ "use client";
+ 
+ import * as React from "react";
++import { SKILLS, skillsLine, type Skill } from "@/lib/skills";
+ import { useRouter } from "next/navigation";
+-import { Camera, X, Plus, MapPin, Star, Globe, AtSign, Link2, CheckCircle2, Circle, Video, Languages, Award } from "lucide-react";
++import { Camera, X, Plus, MapPin, Star, Globe, AtSign, Link2, CheckCircle2, Circle, Video, Languages, Award, Smartphone } from "lucide-react";
+ import { Card, CardHeader, CardBody, Field, Input, Textarea, Select, Button, Avatar, Progress, Badge } from "@/components/ui";
+ import { useAction, useToast } from "@/components/ui/interactive";
+ import { updateProfileAction } from "@/lib/actions/team";
+ import { AddressInput } from "@/components/ui/address-input";
+ import { cn } from "@/lib/utils";
+ 
+-type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; discipline: "photo" | "video"; city: string; home_address: string; equipment: string; home_located: boolean };
+-const SPECIALTY_SUGGESTIONS = { photo: ["Documentary", "Editorial", "Fine art", "Film photography", "Flash at night", "Family formals", "Cultural ceremonies", "Elopements"], video: ["Cinematic films", "Documentary", "Drone (Part 107)", "Audio", "Social teasers", "Multi-cam ceremonies", "Super 8"] };
++type M = { full_name: string; email: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string; skills: Skill[]; city: string; home_address: string; equipment: string; home_located: boolean };
++const SPECIALTY_SUGGESTIONS: Record<string, string[]> = { content: ["Vertical reels", "Same-day teasers", "Behind the scenes", "iPhone cinematic", "TikTok trends", "Guest moments"], photo: ["Documentary", "Editorial", "Fine art", "Film photography", "Flash at night", "Family formals", "Cultural ceremonies", "Elopements"], video: ["Cinematic films", "Documentary", "Drone (Part 107)", "Audio", "Social teasers", "Multi-cam ceremonies", "Super 8"] };
+ 
+ async function resizeImage(file: File, size = 320): Promise<string> {
+   const bmp = await createImageBitmap(file);
+@@ -80,7 +81,7 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
+             </div>
+             <div className="flex-1">
+               <p className="text-xl font-semibold text-ink">{f.full_name}</p>
+-              <p className="text-sm text-muted">{member.discipline === "photo" ? "Photographer" : "Videographer"} · {market || "Set your home market"}</p>
++              <p className="text-sm text-muted">{skillsLine(f.skills)} · {market || "Set your home market"}</p>
+               <div className="mt-3 flex flex-wrap gap-2 text-[12px]"><Badge tone="success"><Star className="size-3" />{stats.rating.toFixed(1)} rating</Badge><Badge>{stats.done} weddings delivered</Badge><Badge tone="blush">{stats.upcoming} upcoming</Badge></div>
+             </div>
+             {f.avatar_url && <Button variant="ghost" size="sm" onClick={() => set("avatar_url", "")}>Remove photo</Button>}
+@@ -97,6 +98,26 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
+           </CardBody>
+         </Card>
+ 
++        <Card>
++          <CardHeader title="What you do" subtitle="Pick every kind of work you take on. You'll see and can request jobs for each one — one role per wedding." />
++          <CardBody>
++            <div className="grid gap-2 sm:grid-cols-3" role="group" aria-label="Skills">
++              {SKILLS.map((s) => {
++                const on = f.skills.includes(s.value);
++                const Icon = s.value === "photo" ? Camera : s.value === "video" ? Video : Smartphone;
++                return (
++                  <label key={s.value} className={cn("flex cursor-pointer items-center gap-2.5 rounded-2xl border p-3 text-sm font-medium transition", on ? "border-midnight-900 bg-midnight-50/60 ring-2 ring-midnight-900" : "border-line hover:border-midnight-200")}>
++                    <input type="checkbox" className="size-4 accent-midnight-900" checked={on}
++                      onChange={() => set("skills", on ? f.skills.filter((x) => x !== s.value) : [...f.skills, s.value])} />
++                    <Icon className="size-4 text-midnight-500" />{s.person}
++                  </label>
++                );
++              })}
++            </div>
++            {err.skills && <p className="mt-2 text-[12px] font-medium text-danger-500" role="alert">{err.skills}</p>}
++          </CardBody>
++        </Card>
++
+         <Card>
+           <CardHeader title="Work details" />
+           <CardBody className="grid gap-4 sm:grid-cols-2">
+@@ -109,7 +130,7 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
+             <Field label={`Service area — ${f.service_radius} miles`} error={err.service_radius}>
+               <input type="range" min={10} max={300} step={10} value={f.service_radius} onChange={(e) => set("service_radius", Number(e.target.value))} className="mt-3 w-full accent-midnight-900" aria-label="Service radius in miles" />
+             </Field>
+-            <Field label="Specialization" className="sm:col-span-2"><TagInput value={f.specialties} onChange={(v) => set("specialties", v)} suggestions={SPECIALTY_SUGGESTIONS[member.discipline]} placeholder="Type and press Enter" /></Field>
++            <Field label="Specialization" className="sm:col-span-2"><TagInput value={f.specialties} onChange={(v) => set("specialties", v)} suggestions={f.skills.flatMap((s) => SPECIALTY_SUGGESTIONS[s] ?? [])} placeholder="Type and press Enter" /></Field>
+             <Field label="Years of experience" error={err.years_experience}><Input type="number" min={0} max={60} value={f.years_experience} onChange={(e) => set("years_experience", Number(e.target.value))} /></Field>
+             <Field label="Main equipment" className="sm:col-span-2" hint="Bodies, lenses, audio, drone — helps coordinators staff the right person"><Textarea value={f.equipment} onChange={(e) => set("equipment", e.target.value)} className="min-h-[72px]" maxLength={600} /></Field>
+             <Field label="Languages"><TagInput value={f.languages} onChange={(v) => set("languages", v)} suggestions={["English", "Spanish", "French", "Portuguese", "Mandarin", "Yoruba", "Hindi"]} placeholder="Add a language" max={6} /></Field>
+@@ -147,9 +168,9 @@ export function ProfileForm({ member, completion, markets, stats }: { member: M;
+             <Avatar name={f.full_name} src={f.avatar_url || null} size={80} ring />
+             <p className="mt-3 text-[11px] uppercase tracking-wide text-muted">Couples see</p>
+             <p className="font-serif text-xl text-ink">{f.full_name}</p>
+-            <p className="text-[13px] text-muted">{member.discipline === "photo" ? "Lead photographer" : "Lead filmmaker"} · {f.years_experience} years</p>
++            <p className="text-[13px] text-muted">{skillsLine(f.skills)} · {f.years_experience} years</p>
+             <p className="mt-3 line-clamp-4 text-sm text-midnight-700">{f.bio || "Your bio will appear here."}</p>
+-            <div className="mt-3 flex flex-wrap gap-1.5">{f.specialties.slice(0, 4).map((s) => <Badge key={s} tone="blush">{member.discipline === "video" ? <Video className="size-3" /> : <Award className="size-3" />}{s}</Badge>)}</div>
++            <div className="mt-3 flex flex-wrap gap-1.5">{f.specialties.slice(0, 4).map((s) => <Badge key={s} tone="blush"><Award className="size-3" />{s}</Badge>)}</div>
+             <p className="mt-3 flex items-center gap-1.5 text-[12px] text-muted"><MapPin className="size-3.5" />{market} · within {f.service_radius} mi</p>
+             <p className="mt-1 flex items-center gap-1.5 text-[12px] text-muted"><Languages className="size-3.5" />{f.languages.join(", ")}</p>
+           </div>
+diff --git a/src/app/team/profile/page.tsx b/src/app/team/profile/page.tsx
+index a3a8d16..50412b4 100644
+--- a/src/app/team/profile/page.tsx
++++ b/src/app/team/profile/page.tsx
+@@ -24,7 +24,7 @@ export default async function ProfilePage() {
+         full_name: member.full_name, email: member.email, phone: member.phone ?? "", bio: member.bio ?? "", home_market_id: member.home_market_id ?? "",
+         service_radius: member.service_radius, specialties: member.specialties, years_experience: member.years_experience, languages: member.languages,
+         portfolio_url: member.portfolio_url ?? "", instagram: member.instagram ?? "", website: member.website ?? "", avatar_url: member.avatar_url ?? "",
+-        discipline: member.discipline, city: member.city ? `${member.city}, ${member.state}` : "",
++        skills: member.skills, city: member.city ? `${member.city}, ${member.state}` : "",
+         home_address: member.home_address ?? "", equipment: member.equipment ?? "", home_located: member.lat != null,
+       }}
+     />
+diff --git a/src/app/team/uploads/page.tsx b/src/app/team/uploads/page.tsx
+index 17e6ae0..748860d 100644
+--- a/src/app/team/uploads/page.tsx
++++ b/src/app/team/uploads/page.tsx
+@@ -1,5 +1,5 @@
+ import { UploadPage } from "@/components/uploads/upload-page";
+-export const metadata = { title: "Photo Uploads" };
+-export default async function PhotoUploads({ searchParams }: { searchParams: Promise<{ wedding?: string }> }) {
+-  return <UploadPage kind="photo" weddingParam={(await searchParams).wedding} />;
++export const metadata = { title: "Uploads" };
++export default async function Uploads({ searchParams }: { searchParams: Promise<{ wedding?: string }> }) {
++  return <UploadPage weddingParam={(await searchParams).wedding} />;
+ }
+diff --git a/src/app/team/uploads/video/page.tsx b/src/app/team/uploads/video/page.tsx
+index a73fc01..5e9ca2e 100644
+--- a/src/app/team/uploads/video/page.tsx
++++ b/src/app/team/uploads/video/page.tsx
+@@ -1,5 +1,6 @@
+-import { UploadPage } from "@/components/uploads/upload-page";
+-export const metadata = { title: "Video Uploads" };
++import { redirect } from "next/navigation";
++/** Old link: photo and video uploads now share one page. */
+ export default async function VideoUploads({ searchParams }: { searchParams: Promise<{ wedding?: string }> }) {
+-  return <UploadPage kind="video" weddingParam={(await searchParams).wedding} />;
++  const w = (await searchParams).wedding;
++  redirect(w ? `/team/uploads?wedding=${encodeURIComponent(w)}` : "/team/uploads");
+ }
+diff --git a/src/components/messages/messages-view.tsx b/src/components/messages/messages-view.tsx
+index f07ea4a..fbd01d9 100644
+--- a/src/components/messages/messages-view.tsx
++++ b/src/components/messages/messages-view.tsx
+@@ -1,6 +1,7 @@
+ "use client";
+ 
+ import * as React from "react";
++import { skillsLine } from "@/lib/skills";
+ import Link from "next/link";
+ import { usePathname, useRouter, useSearchParams } from "next/navigation";
+ import { Search, PenSquare, Paperclip, Send, ArrowLeft, MessageCircle, FileText, Users, Heart, LifeBuoy, X, Loader2, CheckCheck, UserPlus, UserMinus } from "lucide-react";
+@@ -13,10 +14,10 @@ import { cn, chatTime, fmtDate, bytes } from "@/lib/utils";
+ export type Convo = { id: string; subject: string; kind: string; couple: string | null; last_message_at: string; last_body: string | null; last_sender: string | null; unread: number; participants: { id: string; name: string; avatar: string | null; role: string }[] };
+ export type Thread = { id: string; subject: string; kind: string; couple: string | null; wedding_date: string | null; messages: { id: string; body: string; created_at: string; sender_id: string; attachment_name: string | null; attachment_size: number | null; full_name: string; avatar_url: string | null; role: string }[]; participants: { id: string; full_name: string; avatar_url: string | null; role: string; last_read_at: string }[] };
+ 
+-const roleLabel: Record<string, string> = { coordinator: "Coordinator", photographer: "Photographer", videographer: "Videographer", client: "Client", admin: "Admin" };
++const roleLabel: Record<string, string> = { coordinator: "Coordinator", freelancer: "Freelancer", client: "Client", admin: "Admin" };
+ const kindIcon = { wedding: Heart, support: LifeBuoy, direct: MessageCircle } as Record<string, typeof Heart>;
+ 
+-type Contact = { id: string; full_name: string; role: string; avatar_url: string | null };
++type Contact = { id: string; full_name: string; role: string; avatar_url: string | null; skills?: string[] | null };
+ export function MessagesView({ me, convos, thread, weddings, contacts, isClient, canManage = false }: {
+   me: string; convos: Convo[]; thread: Thread | null; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; isClient: boolean; canManage?: boolean;
+ }) {
+@@ -88,7 +89,7 @@ export function MessagesView({ me, convos, thread, weddings, contacts, isClient,
+       <section className={cn("flex min-w-0 flex-1 flex-col", !activeId && "hidden lg:flex")}>
+         {thread ? <ThreadPane me={me} thread={thread} canManage={canManage} contacts={contacts} onBack={() => router.push(pathname)} /> : (
+           <div className="grid flex-1 place-items-center">
+-            <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins, photographers and videographers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
++            <EmptyState icon={MessageCircle} title="Select a conversation" description={isClient ? "Messages with your coordinator live here." : "Message coordinators, admins and other freelancers."} action={<Button icon={PenSquare} onClick={() => setCompose(true)}>New message</Button>} />
+           </div>
+         )}
+       </section>
+@@ -209,7 +210,7 @@ function ThreadPane({ me, thread, onBack, canManage, contacts }: { me: string; t
+   );
+ }
+ 
+-const ROLE_GROUP: [string, string[]][] = [["Coordinators & admins", ["coordinator", "admin"]], ["Photographers", ["photographer"]], ["Videographers", ["videographer"]]];
++const ROLE_GROUP: [string, string[]][] = [["Coordinators & admins", ["coordinator", "admin"]], ["Freelancers", ["freelancer"]]];
+ 
+ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: { open: boolean; onClose: () => void; weddings: { id: string; couple: string; date: string }[]; contacts: Contact[]; onSent: (id: string) => void; isClient: boolean }) {
+   const { run, pending } = useAction();
+@@ -238,7 +239,7 @@ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: {
+   };
+   return (
+     <Modal open={open} onClose={onClose} title="New message"
+-      description={isClient ? "Your coordinator handles your messages and loops in your photo/video team when needed." : "Message coordinators, admins and other photographers & videographers."}
++      description={isClient ? "Your coordinator handles your messages and loops in your photo, video and content team when needed." : "Message coordinators, admins and other freelancers."}
+       footer={<><Button variant="outline" onClick={onClose}>Cancel</Button><Button icon={Send} loading={pending} onClick={submit}>Send message</Button></>}>
+       <div className="space-y-4">
+         {!isClient && (
+@@ -260,7 +261,7 @@ function ComposeModal({ open, onClose, weddings, contacts, onSent, isClient }: {
+                       {list.map((c) => (
+                         <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
+                           <input type="checkbox" className="size-4 accent-midnight-900" checked={to.includes(c.id)} onChange={() => toggle(c.id)} />
+-                          <span className="flex-1 truncate text-ink">{c.full_name}</span>
++                          <span className="flex-1 truncate text-ink">{c.full_name}{c.skills?.length ? <span className="ml-1.5 text-[11px] text-muted">{skillsLine(c.skills)}</span> : null}</span>
+                           <span className="text-[11px] capitalize text-muted">{c.role}</span>
+                         </label>
+                       ))}
+@@ -306,7 +307,7 @@ function PeopleModal({ open, onClose, me, thread, contacts }: { open: boolean; o
+   React.useEffect(() => { if (!pending) setRemoving(null); }, [pending]);
+   return (
+     <Modal open={open} onClose={onClose} title="People in this conversation"
+-      description={hasClient ? "Loop in the photographer or videographer when the couple needs them. They'll see the whole conversation and can reply here, but can't start new conversations with the couple." : "Add or remove coordinators, admins, photographers and videographers."}
++      description={hasClient ? "Loop in a photographer, videographer or content creator when the couple needs them. They'll see the whole conversation and can reply here, but can't start new conversations with the couple." : "Add or remove coordinators, admins, photographers and videographers."}
+       footer={<><Button variant="outline" onClick={onClose}>Done</Button><Button icon={UserPlus} loading={pending && !removing} disabled={!pick.length} onClick={add}>{pick.length > 1 ? `Add ${pick.length} people` : "Add"}</Button></>}>
+       <div className="space-y-5">
+         <div>
+@@ -342,7 +343,7 @@ function PeopleModal({ open, onClose, me, thread, contacts }: { open: boolean; o
+                     {list.map((c) => (
+                       <label key={c.id} className="flex cursor-pointer items-center gap-2.5 rounded-xl px-2 py-1.5 text-sm hover:bg-canvas">
+                         <input type="checkbox" className="size-4 accent-midnight-900" checked={pick.includes(c.id)} onChange={() => toggle(c.id)} />
+-                        <span className="flex-1 truncate text-ink">{c.full_name}</span>
++                        <span className="flex-1 truncate text-ink">{c.full_name}{c.skills?.length ? <span className="ml-1.5 text-[11px] text-muted">{skillsLine(c.skills)}</span> : null}</span>
+                         <span className="text-[11px] capitalize text-muted">{c.role}</span>
+                       </label>
+                     ))}
+diff --git a/src/components/uploads/markers-modal.tsx b/src/components/uploads/markers-modal.tsx
+index 50122d0..64836d5 100644
+--- a/src/components/uploads/markers-modal.tsx
++++ b/src/components/uploads/markers-modal.tsx
+@@ -17,7 +17,9 @@ export function MarkersModal({ open, onClose, upload, readOnly }: {
+ }) {
+   const router = useRouter();
+   const toast = useToast();
+-  const [markers, setMarkers] = React.useState<Marker[]>([]);
++  // Mounted fresh for each file (callers pass key={upload.id}), so state starts from the props — no reset effect
++  // that could wipe what someone has already started typing.
++  const [markers, setMarkers] = React.useState<Marker[]>(upload?.markers ?? []);
+   const [time, setTime] = React.useState("");
+   const [beat, setBeat] = React.useState<string>(MARKER_BEATS[0].value);
+   const [note, setNote] = React.useState("");
+@@ -25,9 +27,6 @@ export function MarkersModal({ open, onClose, upload, readOnly }: {
+   const [busy, setBusy] = React.useState(false);
+   const changed = React.useRef(false);
+ 
+-  React.useEffect(() => {
+-    if (open && upload) { setMarkers(upload.markers); setTime(""); setNote(""); setError(null); changed.current = false; }
+-  }, [open, upload]);
+ 
+   const close = () => { onClose(); if (changed.current) router.refresh(); };
+   const add = async () => {
+diff --git a/src/components/uploads/upload-center.tsx b/src/components/uploads/upload-center.tsx
+index bb0e346..0ad3714 100644
+--- a/src/components/uploads/upload-center.tsx
++++ b/src/components/uploads/upload-center.tsx
+@@ -4,7 +4,7 @@ import * as React from "react";
+ import Link from "next/link";
+ import { useRouter, usePathname } from "next/navigation";
+ import {
+-  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause, Tag, Bookmark, Mic,
++  UploadCloud, Image as ImageIcon, Film, RotateCcw, X, CheckCircle2, AlertCircle, Loader2, ChevronRight, HardDrive, Folder, Info, Trash2, Clock, Pause, Tag, Bookmark, Mic, Smartphone,
+ } from "lucide-react";
+ import { Button, Card, CardHeader, CardBody, StatusBadge, EmptyState, Progress, Alert, Badge, Select, Field, Checkbox } from "@/components/ui";
+ import { Tabs, useToast, useAction } from "@/components/ui/interactive";
+@@ -24,29 +24,50 @@ type FileRow = {
+ type Tags = { moment: string; source: string; cameraMarkers: boolean };
+ type QueueItem = { key: string; file: File; pct: number; status: "queued" | "uploading" | "done" | "failed"; error?: string; id?: string; category: string; weddingId: string; retryOf?: string } & Tags;
+ 
+-/** Photos keep RAW / Edited / Highlights folders; video files are filed by moment and camera instead. */
+-const PHOTO_CATS = [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }] as const;
+ const LEGACY_VIDEO_CATS: Record<string, string> = { footage: "Footage", audio: "Audio", ceremony: "Ceremony", reception: "Reception" };
+-const ACCEPT = {
+-  photo: ".cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2,.jpg,.jpeg,.png,.tif,.tiff,.heic,.zip",
+-  video: "video/*,.mp4,.mov,.mxf,.braw,.r3d,.wav,.mp3,.zip",
++const GB = 1024 ** 3;
++/**
++ * What each kind of upload looks like. The kind comes from the person's role on the selected wedding
++ * (photographer → photo, videographer → video, content creator → content), so one Uploads page serves everyone.
++ */
++const KIND: Record<Kind, {
++  title: string; folder: string; noun: string; cats: { value: string; label: string }[] | null; mixed: boolean; timed: boolean;
++  sourceLabel: string; maxBytes: number; maxText: string; accept: string; hint: string;
++}> = {
++  photo: {
++    title: "Photography", folder: "Photo", noun: "photos", cats: [{ value: "raw", label: "RAW" }, { value: "edited", label: "Edited" }, { value: "highlights", label: "Highlights" }],
++    mixed: true, timed: false, sourceLabel: "Camera body", maxBytes: 0.2 * GB, maxText: "Photo files are limited to 200 MB each.",
++    accept: ".cr2,.cr3,.nef,.arw,.raf,.dng,.orf,.rw2,.jpg,.jpeg,.png,.tif,.tiff,.heic,.zip", hint: "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each",
++  },
++  video: {
++    title: "Videography", folder: "Video", noun: "video files", cats: null,
++    mixed: false, timed: true, sourceLabel: "Camera / recorder", maxBytes: 100 * GB, maxText: "Video files are limited to 100 GB each.",
++    accept: "video/*,.mp4,.mov,.mxf,.braw,.r3d,.wav,.mp3,.zip", hint: "MP4, MOV, MXF, BRAW, WAV/MP3 audio · up to 100 GB each",
++  },
++  content: {
++    title: "Content", folder: "Content", noun: "clips and photos", cats: [{ value: "raw", label: "Raw clips & photos" }, { value: "finished", label: "Finished reels" }],
++    mixed: true, timed: true, sourceLabel: "Device", maxBytes: 20 * GB, maxText: "Content files are limited to 20 GB each.",
++    accept: "video/*,image/*,.mp4,.mov,.heic,.jpg,.jpeg,.png", hint: "Vertical MP4/MOV clips, phone photos and finished reels · up to 20 GB each",
++  },
+ };
++export type Kind = "photo" | "video" | "content";
+ const CONCURRENCY = 3;
+ 
+-export function UploadCenter({ kind, weddings, files, selected, provider, providerLabel }: { kind: "photo" | "video"; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string; providerLabel: string }) {
++export function UploadCenter({ kind, weddings, files, selected, provider, providerLabel }: { kind: Kind; weddings: Wedding[]; files: FileRow[]; selected: string | null; provider: string; providerLabel: string }) {
+   const router = useRouter();
+   const pathname = usePathname();
+   const toast = useToast();
+   const { run } = useAction();
+   const wedding = weddings.find((w) => w.id === selected) ?? null;
+-  const [cat, setCat] = React.useState<string>(kind === "photo" ? "raw" : "footage");
+-  // Video must say which part of the day it covers; photographers often dump a whole card, so "whole day" is allowed.
+-  const [moment, setMoment] = React.useState<string>(kind === "photo" ? MIXED.value : "");
++  const cfg = KIND[kind];
++  const [cat, setCat] = React.useState<string>(cfg.cats?.[0].value ?? "footage");
++  // Video must say which part of the day it covers; photographers and creators often dump a whole card, so "whole day" is allowed.
++  const [moment, setMoment] = React.useState<string>(cfg.mixed ? MIXED.value : "");
+   const [source, setSource] = React.useState<string>(SOURCES[kind][0].value);
+   const [cameraMarkers, setCameraMarkers] = React.useState(false);
+   const [markersFor, setMarkersFor] = React.useState<FileRow | null>(null);
+   const [retagging, setRetagging] = React.useState<string | null>(null);
+-  const needsMoment = kind === "video" && !moment;
++  const needsMoment = !cfg.mixed && !moment;
+   const [queue, setQueue] = React.useState<QueueItem[]>([]);
+   const [drag, setDrag] = React.useState(false);
+   const handles = React.useRef(new Map<string, UploadHandle>());
+@@ -95,8 +116,8 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+     if (needsMoment) { toast({ tone: "error", title: "Choose the moment first", body: "Pick which part of the day these clips cover, then add the files." }); return; }
+     const arr = Array.from(list).filter((f) => f.size > 0);
+     if (!arr.length) return;
+-    const tooBig = arr.filter((f) => (kind === "photo" ? f.size > 200 * 1024 ** 2 : f.size > 100 * 1024 ** 3));
+-    if (tooBig.length) toast({ tone: "error", title: `${tooBig.length} file${tooBig.length > 1 ? "s are" : " is"} too large`, body: kind === "photo" ? "Photo files are limited to 200 MB each." : "Video files are limited to 100 GB each." });
++    const tooBig = arr.filter((f) => f.size > cfg.maxBytes);
++    if (tooBig.length) toast({ tone: "error", title: `${tooBig.length} file${tooBig.length > 1 ? "s are" : " is"} too large`, body: cfg.maxText });
+     const ok = arr.filter((f) => !tooBig.includes(f));
+     setQueue((q) => [...q, ...ok.map((file) => ({ key: `${file.name}-${file.size}-${Math.random()}`, file, pct: 0, status: "queued" as const, category: cat, weddingId: wedding.id, moment, source, cameraMarkers }))]);
+   };
+@@ -107,14 +128,14 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+   const visibleFiles = files.filter((f) => !queue.some((q) => q.id === f.id && q.status !== "done"));
+   const failedSaved = visibleFiles.filter((f) => f.status === "failed");
+   const totalPct = queue.length ? queue.reduce((s, q) => s + (q.status === "done" ? 100 : q.pct), 0) / queue.length : 0;
+-  const Icon = kind === "photo" ? ImageIcon : Film;
++  const Icon = kind === "photo" ? ImageIcon : kind === "video" ? Film : Smartphone;
++  const catLabel = (v: string) => cfg.cats?.find((c) => c.value === v)?.label ?? LEGACY_VIDEO_CATS[v] ?? v;
+   const retag = async (f: FileRow, patch: { moment?: string; source?: string }) => {
+     setRetagging(f.id);
+     run(() => retagUploadAction(f.id, patch), { onSuccess: () => router.refresh() });
+     setRetagging(null);
+   };
+-  const folderLabel = kind === "photo" ? PHOTO_CATS.find((c) => c.value === cat)?.label : momentLabel(moment || null);
+-  const untaggedHere = kind === "video" ? visibleFiles.filter((f) => f.status !== "failed" && !f.moment).length : 0;
++  const untaggedHere = !cfg.mixed ? visibleFiles.filter((f) => f.status !== "failed" && !f.moment).length : 0;
+ 
+   return (
+     <div className="grid gap-6 xl:grid-cols-[300px_1fr]">
+@@ -143,34 +164,34 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+         ) : (
+           <>
+             <Card>
+-              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
++              <div className="flex flex-col gap-4 p-5 sm:p-6 2xl:flex-row 2xl:items-center 2xl:justify-between">
+                 <nav aria-label="Folder" className="flex flex-wrap items-center gap-1 text-sm text-muted">
+                   <Folder className="mr-1 size-4" />Weddings<ChevronRight className="size-3.5" />
+                   <span className="text-midnight-700">{wedding.couple}</span><ChevronRight className="size-3.5" />
+                   <span>{wedding.date}</span><ChevronRight className="size-3.5" />
+-                  <span>{kind === "photo" ? "Photo" : "Video"}</span><ChevronRight className="size-3.5" />
+-                  {kind === "photo" && <><span>{folderLabel}</span><ChevronRight className="size-3.5" /></>}
+-                  <span className="font-semibold text-ink">{kind === "photo" ? momentLabel(moment) : folderLabel}</span>
++                  <span>{cfg.folder}</span><ChevronRight className="size-3.5" />
++                  {cfg.cats && <><span>{catLabel(cat)}</span><ChevronRight className="size-3.5" /></>}
++                  <span className="font-semibold text-ink">{momentLabel(moment || null)}</span>
+                 </nav>
+-                {kind === "photo" && <Tabs value={cat} onChange={setCat} items={PHOTO_CATS.map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />}
++                {cfg.cats && <Tabs className="max-w-full self-start overflow-x-auto" value={cat} onChange={setCat} items={cfg.cats.map((c) => ({ ...c, count: files.filter((f) => f.category === c.value && f.wedding_id === wedding.id && f.status !== "failed").length }))} />}
+               </div>
+               <div className="mx-5 mb-4 rounded-2xl bg-canvas/70 p-4 ring-1 ring-line sm:mx-6">
+                 <p className="flex items-center gap-1.5 text-[13px] font-semibold text-ink"><Tag className="size-4 text-blush-500" />Tag this batch</p>
+-                <p className="mt-0.5 text-[12px] text-muted">Every file you add next gets these tags. Upload one moment and one {kind === "photo" ? "camera body" : "camera or recorder"} at a time — you can change a file&apos;s tag later.</p>
++                <p className="mt-0.5 text-[12px] text-muted">Every file you add next gets these tags. Upload one moment and one {cfg.sourceLabel.toLowerCase()} at a time — you can change a file&apos;s tag later.</p>
+                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
+-                  <Field label="Moment" htmlFor="tag-moment" required={kind === "video"}>
++                  <Field label="Moment" htmlFor="tag-moment" required={!cfg.mixed}>
+                     <Select id="tag-moment" value={moment} onChange={(e) => setMoment(e.target.value)} aria-invalid={needsMoment || undefined}>
+-                      {kind === "video" ? <option value="" disabled>Choose the part of the day…</option> : <option value={MIXED.value}>{MIXED.label}</option>}
++                      {!cfg.mixed ? <option value="" disabled>Choose the part of the day…</option> : <option value={MIXED.value}>{MIXED.label}</option>}
+                       {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                     </Select>
+                   </Field>
+-                  <Field label={kind === "photo" ? "Camera body" : "Camera / recorder"} htmlFor="tag-source">
++                  <Field label={cfg.sourceLabel} htmlFor="tag-source">
+                     <Select id="tag-source" value={source} onChange={(e) => setSource(e.target.value)}>
+                       {SOURCES[kind].map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                     </Select>
+                   </Field>
+                 </div>
+-                {kind === "video" && (
++                {cfg.timed && (
+                   <Checkbox className="mt-3 items-start [&>input]:mt-0.5" checked={cameraMarkers} onChange={(e) => setCameraMarkers(e.target.checked)}
+                     label={<span className="text-[13px]">I dropped <b>in-camera markers</b> (shot marks / flags) on these clips{isAudioSource(source) ? " or slate claps on this recording" : ""}</span>} />
+                 )}
+@@ -182,9 +203,9 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+                   className={cn("flex flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-10 text-center transition",
+                     needsMoment ? "border-midnight-100 bg-canvas/40 opacity-70" : drag ? "border-blush-400 bg-blush-50" : "border-midnight-100 bg-canvas/60 hover:border-midnight-200")}>
+                   <div className="grid size-14 place-items-center rounded-2xl bg-white text-midnight-700 shadow-sm"><UploadCloud className="size-6" /></div>
+-                  <p className="mt-4 font-semibold text-ink">Drag & drop {kind === "photo" ? "photos" : "video files"} here</p>
+-                  <p className="mt-1 text-sm text-muted">{needsMoment ? "Choose the moment above first" : kind === "photo" ? "RAW (CR3, NEF, ARW…), JPEG or ZIP · up to 200 MB each" : "MP4, MOV, MXF, BRAW, WAV/MP3 audio · up to 100 GB each"}</p>
+-                  <input ref={inputRef} type="file" multiple accept={ACCEPT[kind]} className="hidden" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
++                  <p className="mt-4 font-semibold text-ink">Drag & drop {cfg.noun} here</p>
++                  <p className="mt-1 text-sm text-muted">{needsMoment ? "Choose the moment above first" : cfg.hint}</p>
++                  <input ref={inputRef} type="file" multiple accept={cfg.accept} className="hidden" onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+                   <Button className="mt-5" icon={UploadCloud} disabled={needsMoment} onClick={() => inputRef.current?.click()}>Select files</Button>
+                 </div>
+                 {kind === "video" && <Alert tone="info" icon={Info} className="mt-4">Large video files can take a while. Keep this tab open until each file shows <b>Uploaded</b>; we then process previews in the background — you can safely leave once processing starts.</Alert>}
+@@ -210,7 +231,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+                             <span className="shrink-0 text-muted">{q.status === "uploading" ? `${Math.round(q.pct)}%` : q.status === "queued" ? "Waiting" : q.status === "done" ? (kind === "video" ? "Processing" : "Uploaded") : "Failed"}</span>
+                           </div>
+                           {q.status === "failed" ? <p className="text-[12px] text-danger-500">{q.error}</p> : <Progress value={q.pct} className="mt-1.5 h-1.5" tone={q.status === "done" ? "success" : "midnight"} />}
+-                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === q.category)?.label ?? q.category} · ` : ""}{momentLabel(q.moment || null)} · {SOURCE_LABEL[q.source] ?? q.source}</p>
++                          <p className="mt-1 text-[11px] text-muted">{bytes(q.file.size)} · {cfg.cats ? `${catLabel(q.category)} · ` : ""}{momentLabel(q.moment || null)} · {SOURCE_LABEL[q.source] ?? q.source}</p>
+                         </div>
+                         {q.status === "failed" && <Button size="sm" variant="outline" icon={RotateCcw} onClick={() => retry(q)}>Retry</Button>}
+                         {(q.status === "uploading" || q.status === "queued") && <button onClick={() => cancel(q)} className="text-midnight-300 hover:text-danger-500" aria-label={`Cancel ${q.file.name}`}><X className="size-4" /></button>}
+@@ -237,7 +258,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+                       {failedSaved.map((f) => (
+                         <label key={f.id} className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[12px] font-medium text-danger-700 ring-1 ring-danger-500/20 hover:bg-danger-50">
+                           <RotateCcw className="size-3" />Retry {f.filename}
+-                          <input type="file" className="hidden" accept={ACCEPT[kind]} onChange={(e) => {
++                          <input type="file" className="hidden" accept={cfg.accept} onChange={(e) => {
+                             const file = e.target.files?.[0];
+                             if (file) setQueue((q) => [...q, { key: `${file.name}-${Math.random()}`, file, pct: 0, status: "queued", category: f.category, weddingId: wedding.id, retryOf: f.id, id: f.id, moment: f.moment ?? moment, source: f.source ?? source, cameraMarkers: f.camera_markers }]);
+                             e.target.value = "";
+@@ -252,9 +273,9 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+                 {visibleFiles.length === 0 ? <EmptyState icon={Icon} title="No files yet" description="Files you upload for this wedding will appear here." /> : (
+                   <table className="w-full min-w-[860px] text-sm">
+                     <thead><tr className="border-y border-line bg-canvas/60 text-left text-[12px] uppercase tracking-wide text-muted">
+-                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Moment</th><th className="px-4 py-3 font-medium">{kind === "photo" ? "Folder · body" : "Camera"}</th><th className="px-4 py-3 font-medium">Size</th>
+-                      {kind === "video" && <th className="px-4 py-3 font-medium">Duration</th>}
+-                      {kind === "video" && <th className="px-4 py-3 font-medium">Markers</th>}
++                      <th className="px-6 py-3 font-medium">Filename</th><th className="px-4 py-3 font-medium">Moment</th><th className="px-4 py-3 font-medium">{cfg.cats ? `Folder · ${cfg.sourceLabel.toLowerCase()}` : "Camera"}</th><th className="px-4 py-3 font-medium">Size</th>
++                      {cfg.timed && <th className="px-4 py-3 font-medium">Duration</th>}
++                      {cfg.timed && <th className="px-4 py-3 font-medium">Markers</th>}
+                       <th className="px-4 py-3 font-medium">Status</th><th className="px-4 py-3 font-medium">Uploaded</th><th className="px-4 py-3" />
+                     </tr></thead>
+                     <tbody>
+@@ -265,20 +286,20 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+                             {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
+                               <Select aria-label={`Moment for ${f.filename}`} value={f.moment ?? ""} disabled={retagging === f.id}
+                                 onChange={(e) => retag(f, { moment: e.target.value })}
+-                                className={cn("h-9 w-[190px] text-[13px]", !f.moment && kind === "video" && "border-warning-500 text-warning-700")}>
++                                className={cn("h-9 w-[190px] text-[13px]", !f.moment && !cfg.mixed && "border-warning-500 text-warning-700")}>
+                                 {!f.moment && <option value="" disabled>Untagged</option>}
+-                                {kind === "photo" && <option value={MIXED.value}>{MIXED.label}</option>}
++                                {cfg.mixed && <option value={MIXED.value}>{MIXED.label}</option>}
+                                 {MOMENTS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+                               </Select>
+                             )}
+                           </td>
+                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">
+-                            {kind === "photo" ? `${PHOTO_CATS.find((c) => c.value === f.category)?.label ?? f.category}${f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ""}`
++                            {cfg.cats ? `${catLabel(f.category)}${f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ""}`
+                               : <span className="inline-flex items-center gap-1">{isAudioSource(f.source) && <Mic className="size-3.5 text-midnight-300" />}{f.source ? SOURCE_LABEL[f.source] ?? f.source : LEGACY_VIDEO_CATS[f.category] ?? f.category}</span>}
+                           </td>
+                           <td className="whitespace-nowrap px-4 py-3 text-midnight-600">{bytes(Number(f.size_bytes))}</td>
+-                          {kind === "video" && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
+-                          {kind === "video" && (
++                          {cfg.timed && <td className="px-4 py-3 text-midnight-600">{duration(f.duration_seconds)}</td>}
++                          {cfg.timed && (
+                             <td className="px-4 py-3">
+                               {f.status === "failed" ? <span className="text-midnight-300">—</span> : (
+                                 <button onClick={() => setMarkersFor(f)} className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium text-midnight-700 ring-1 ring-line hover:bg-midnight-50">
+@@ -302,7 +323,7 @@ export function UploadCenter({ kind, weddings, files, selected, provider, provid
+               <HardDrive className="mt-0.5 size-4 shrink-0" />
+               <p>Storage: <b className="text-midnight-700">{providerLabel}</b>. Files go directly from your browser to storage{provider === "dropbox" ? " — large videos in 32 MB pieces that retry on their own if your connection drops" : " over signed URLs"}; {CONCURRENCY} files upload in parallel and each one is checked once it lands. Due within 48 hours of the wedding. Keep your backup copies until your coordinator confirms delivery.</p>
+             </div>
+-            <MarkersModal open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
++            <MarkersModal key={markersFor?.id ?? "none"} open={!!markersFor} onClose={() => setMarkersFor(null)} upload={markersFor} />
+           </>
+         )}
+       </div>
+diff --git a/src/components/uploads/upload-page.tsx b/src/components/uploads/upload-page.tsx
+index d4de190..4fbdc07 100644
+--- a/src/components/uploads/upload-page.tsx
++++ b/src/components/uploads/upload-page.tsx
+@@ -2,22 +2,23 @@ import Link from "next/link";
+ import { requireActiveMember } from "@/lib/services/me";
+ import { uploadableWeddings, listUploads } from "@/lib/services/uploads";
+ import { storage } from "@/lib/storage";
++import { skillForRole } from "@/lib/skills";
+ import { UploadCenter } from "./upload-center";
+-import { LinkTabs } from "@/components/ui";
+ 
+-export async function UploadPage({ kind, weddingParam }: { kind: "photo" | "video"; weddingParam?: string }) {
++/**
++ * One Uploads page for every freelancer. The weddings list shows each job with the person's role on it;
++ * what they upload for the selected wedding (photos, video/audio or content) follows that role.
++ */
++export async function UploadPage({ weddingParam }: { weddingParam?: string }) {
+   const { user, member } = await requireActiveMember();
+   const weddings = await uploadableWeddings(member.id);
+-  const selected = weddings.find((w) => w.id === weddingParam)?.id ?? weddings.find((w) => new Date(w.wedding_date) <= new Date())?.id ?? weddings[0]?.id ?? null;
+-  const files = selected ? await listUploads(user.id, kind, selected) : [];
+-  const base = kind === "photo" ? "/team/uploads" : "/team/uploads/video";
++  const selected = weddings.find((w) => w.id === weddingParam) ?? weddings.find((w) => new Date(w.wedding_date) <= new Date()) ?? weddings[0] ?? null;
++  const kind = selected ? skillForRole(selected.role) : member.skills[0] ?? "photo";
++  const files = selected ? await listUploads(user.id, kind, selected.id) : [];
+   return (
+     <div>
+-      <LinkTabs active={base} tabs={[
+-        { href: "/team/uploads" + (selected ? `?wedding=${selected}` : ""), label: "Photo uploads" },
+-        { href: "/team/uploads/video" + (selected ? `?wedding=${selected}` : ""), label: "Video uploads" },
+-      ].map((t, i) => ({ ...t, href: i === 0 ? (kind === "photo" ? base : t.href) : kind === "video" ? base : t.href }))} />
+-      <UploadCenter kind={kind} provider={storage().name} providerLabel={storage().label} selected={selected}
++      {/* Remount when the kind of work changes so tags and folders reset for that role */}
++      <UploadCenter key={kind} kind={kind} provider={storage().name} providerLabel={storage().label} selected={selected?.id ?? null}
+         weddings={weddings.map((w) => ({ id: w.id, couple: w.couple, date: w.wedding_date, assignmentId: w.assignment_id, role: w.role, city: w.city, done: w.done, failed: w.failed, untagged: w.untagged, bytes: Number(w.bytes) }))}
+         files={files.map((f) => ({ ...f, size_bytes: Number(f.size_bytes), created_at: new Date(f.created_at).toISOString() })) as never} />
+       <p className="mt-6 text-[12px] text-muted">Need help? Read <Link className="underline" href="/team/handbook/how-to-upload">How to upload</Link>, <Link className="underline" href="/team/handbook/tagging-footage">Tagging footage</Link> and the <Link className="underline" href="/team/handbook/48-hour-policy">48-hour policy</Link>.</p>
+diff --git a/src/content/catalog.ts b/src/content/catalog.ts
+index c8ef2f7..d00b6f2 100644
+--- a/src/content/catalog.ts
++++ b/src/content/catalog.ts
+@@ -104,6 +104,7 @@ export const ADDONS = [
+   { slug: "additional-hour", name: "Additional hour", description: "Extend coverage for the whole team.", price: 350, unit: "hour", applies: ["photo", "video", "both"] },
+   { slug: "drone-coverage", name: "Drone coverage", description: "FAA-certified aerials of your venue and ceremony.", price: 500, unit: "flat", applies: ["video", "both"] },
+   { slug: "highlight-video", name: "Highlight video", description: "A 3-minute highlight film from a solo videographer.", price: 1200, unit: "flat", applies: ["photo"] },
++  { slug: "content-creator", name: "Content creator", description: "A dedicated creator for phone-shot reels, behind-the-scenes and a same-day teaser for your socials.", price: 900, unit: "flat", applies: ["photo", "video", "both"] },
+   { slug: "full-ceremony-video", name: "Full ceremony video", description: "Multi-camera edit of the entire ceremony with clean audio.", price: 650, unit: "flat", applies: ["video", "both"] },
+   { slug: "reception-coverage", name: "Extended reception coverage", description: "Two more hours of party, exit and late-night moments.", price: 700, unit: "flat", applies: ["photo", "video", "both"] },
+   { slug: "heirloom-album", name: "Heirloom album", description: "A 10×10 lay-flat linen album, 30 spreads.", price: 900, unit: "flat", applies: ["photo", "both"] },
+diff --git a/src/content/contract.ts b/src/content/contract.ts
+index f5e7e83..ccf9ee7 100644
+--- a/src/content/contract.ts
++++ b/src/content/contract.ts
+@@ -7,7 +7,7 @@ export const CONTRACT_PLACEHOLDERS: [string, string][] = [
+   ["company", "Your company name"],
+   ["contractor_name", "Team member's full name"],
+   ["contractor_email", "Team member's email"],
+-  ["discipline", "photographer / videographer"],
++  ["discipline", "photographer / videographer / content creator (from the slot)"],
+   ["role", "Role on this wedding, e.g. Lead photographer"],
+   ["couple", "The couple's names"],
+   ["wedding_date", "Wedding date"],
+diff --git a/src/content/footage.ts b/src/content/footage.ts
+index 3f453ec..0e34606 100644
+--- a/src/content/footage.ts
++++ b/src/content/footage.ts
+@@ -60,10 +60,16 @@ export const SOURCES = {
+     { value: "body_1", label: "Main body" },
+     { value: "body_2", label: "Second body" },
+   ],
++  content: [
++    { value: "phone_1", label: "Main phone" },
++    { value: "phone_2", label: "Second phone" },
++    { value: "content_camera", label: "Camera" },
++    { value: "action_cam", label: "Action cam" },
++  ],
+ } as const;
+-export const SOURCE_LABEL: Record<string, string> = Object.fromEntries([...SOURCES.video, ...SOURCES.photo].map((s) => [s.value, s.label]));
++export const SOURCE_LABEL: Record<string, string> = Object.fromEntries([...SOURCES.video, ...SOURCES.photo, ...SOURCES.content].map((s) => [s.value, s.label]));
+ export const isAudioSource = (s: string | null | undefined) => !!s && s.startsWith("audio_");
+-export const isSource = (kind: "photo" | "video" | "document", v: string) => kind !== "document" && SOURCES[kind].some((s) => s.value === v);
++export const isSource = (kind: "photo" | "video" | "content" | "document", v: string) => kind !== "document" && SOURCES[kind].some((s) => s.value === v);
+ 
+ /** Parses "1:02:03", "02:03", "2:03.5" or plain seconds into whole seconds. */
+ export function parseTimecode(input: string): number | null {
+diff --git a/src/content/handbook.ts b/src/content/handbook.ts
+index 822a2ec..e083469 100644
+--- a/src/content/handbook.ts
++++ b/src/content/handbook.ts
+@@ -5,7 +5,7 @@ export type HandbookArticleSeed = {
+   slug: string;
+   title: string;
+   summary: string;
+-  audience?: "all" | "photo" | "video";
++  audience?: "all" | "photo" | "video" | "content";
+   minutes?: number;
+   body: string;
+ };
+@@ -163,6 +163,12 @@ If anything goes wrong, stay calm, solve what you can, and message your coordina
+ 4. On-camera scratch audio **always on** — it's how the edit syncs everything.
+ 5. 48 kHz, 24-bit (or 32-bit float). Monitor with headphones during vows and speeches.
+ 
++## Content creators
++- Phone or camera set to **4K, 30 fps** (60 fps for slow-motion moments), **vertical 9:16** unless the coordinator asks for horizontal.
++- Lock exposure and focus on faces; turn on HDR video only if every clip from the day uses it.
++- Phone clock on network time — it's how your clips line up with the film and photos.
++- Record the vows, first kiss and first dance on video even if you also take photos of them.
++
+ ## Photography
+ - RAW only, **dual card slots recording to both cards** (backup/mirror mode, not overflow).
+ - Camera clocks synced at call time (see time-sync).
+@@ -182,7 +188,9 @@ Check that every card has recorded to both slots, and that audio files exist for
+ 1. Open **Uploads** and pick the wedding.
+ 2. In **Tag this batch**, choose the **moment** (Getting ready, Ceremony, Toasts & speeches, First dance…) and the **camera or recorder** (A-cam, B-cam, Drone, Audio · lav on officiant…).
+ 3. Add the files for that moment and camera. Then change the tags and add the next batch.
+-4. Video can't be uploaded without a moment. Photographers can tag a full card as **Whole day / mixed** — we sort photos by capture time, which is why the time-sync is required.
++4. Video can't be uploaded without a moment. Photographers and content creators can tag a full card as **Whole day / mixed** — we sort by capture time, which is why the time-sync is required.
++
++There's one **Uploads** page for everyone. Pick the wedding and the page asks for what your role on that wedding needs: photos for photographers, video and audio for videographers, clips, phone photos and finished reels for content creators.
+ 
+ Files go into the company Dropbox in matching folders, e.g. \`Weddings / 2026-10-10 Ade & Tolu / Video / Toasts & speeches / Daniel Kim · B-cam\`.
+ 
+@@ -250,6 +258,41 @@ The agreement also commits you to the [shooting standard](/team/handbook/shootin
+       },
+     ],
+   },
++  {
++    slug: "content-creator-guidelines",
++    title: "Content Creator Guidelines",
++    description: "Phone-first reels, behind-the-scenes and same-day teasers.",
++    icon: "Smartphone",
++    articles: [
++      {
++        slug: "content-creator-guide",
++        title: "Content creator guide",
++        summary: "What couples book a content creator for, and how to deliver it.",
++        audience: "content",
++        minutes: 4,
++        body: `Couples add a content creator to get **social-ready content fast**: vertical reels, behind-the-scenes moments and a same-day teaser they can post that night. You work alongside the photographer and videographer — never in their way.
++
++## What to deliver
++- **Same-day teaser:** a 15–30 second vertical reel delivered to your coordinator before the end of the reception.
++- **Raw clips & phone photos:** everything you shot, uploaded within 48 hours.
++- **2–3 finished reels** within 7 days, using the couple's style notes from the questionnaire.
++
++## On the day
++- Shoot vertical 9:16, 4K, 30 fps (60 fps for slow motion). Phone clock on network time.
++- Stay out of the photographer's and videographer's lines during the processional, vows and first dance — ask the leads where to stand.
++- Capture what the other teams don't: getting-ready energy, guest reactions, details in motion, the dance floor from inside.
++- Bring a gimbal or stabiliser, two charged power banks and enough free storage for the whole day.
++
++## Posting and privacy
++- Everything you shoot belongs to Visual Weddings and the couple. **Never post to your own accounts** before the couple has posted, and only with credit to Visual Weddings.
++- Don't film guests who ask not to be filmed, and keep children's faces out of public posts unless the couple approves.
++- Use licensed or platform-provided music only.
++
++## Uploading
++Open **Uploads**, pick the wedding, and tag each batch with the moment and device. Use *Raw clips & photos* for everything you shot and *Finished reels* for edits. Add markers to long clips the editor should look at first.`,
++      },
++    ],
++  },
+   {
+     slug: "photographer-guidelines",
+     title: "Photographer Guidelines",
+@@ -545,8 +588,8 @@ If a couple asks for something outside the package, smile and say *"Let me check
+         title: "How to upload",
+         summary: "Step-by-step for photo and video uploads.",
+         minutes: 3,
+-        body: `1. Open **Uploads** and pick the wedding.
+-2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*.
++        body: `1. Open **Uploads** and pick the wedding. What you can upload follows your role on that wedding.
++2. Photographers: choose the folder — *RAW*, *Edited* or *Highlights*. Content creators: *Raw clips & photos* or *Finished reels*.
+ 3. In **Tag this batch**, choose the moment and the camera or recorder ([how tagging works](/team/handbook/tagging-footage)). Video needs a moment before you can add files.
+ 4. Drag files in or click **Select files**. You can add hundreds at once; large videos upload in pieces and resume on their own after a dropped connection.
+ 5. Keep the tab open until every file shows **Uploaded** — that means it was checked and is safe in the company Dropbox. Video files then show **Processing**.
+diff --git a/src/content/standards.ts b/src/content/standards.ts
+index 27c9e70..b6f0121 100644
+--- a/src/content/standards.ts
++++ b/src/content/standards.ts
+@@ -1,5 +1,5 @@
+ /**
+- * The standards every photographer and videographer accepts before taking weddings.
++ * The standards every freelancer (photographer, videographer or content creator) accepts before taking weddings.
+  * Bump STANDARDS_VERSION when these change materially — everyone is asked to accept again.
+  */
+ export const STANDARDS_VERSION = 1;
+@@ -13,6 +13,7 @@ export const STANDARDS: { title: string; href: string; points: string[] }[] = [
+       "Time-of-day timecode on every camera and recorder, synced at call time, plus a slate clap.",
+       "Dedicated audio: lav on the partner at the altar and on the officiant, plus a DJ/board recorder.",
+       "Photo: RAW only, camera clocks synced at call time.",
++      "Content: vertical 4K, phone clock on network time, never posted to your own accounts first.",
+     ],
+   },
+   {
+diff --git a/src/lib/actions/account.ts b/src/lib/actions/account.ts
+index 0cbad18..937a78e 100644
+--- a/src/lib/actions/account.ts
++++ b/src/lib/actions/account.ts
+@@ -75,7 +75,7 @@ export async function revokeSessionAction(id: string | "others"): Promise<Action
+  * details are collected by the payout provider (e.g. Stripe Connect) and never touch our database.
+  */
+ export async function updatePayoutAction(input: { method: string; holder: string; routing: string; account: string }): Promise<ActionResult> {
+-  const u = await requireUser(["photographer", "videographer"]);
++  const u = await requireUser(["freelancer"]);
+   const fe: Record<string, string> = {};
+   if (!["Direct deposit", "PayPal", "Check"].includes(input.method)) fe.method = "Choose a method";
+   if (input.method === "Direct deposit") {
+diff --git a/src/lib/actions/auth.ts b/src/lib/actions/auth.ts
+index d25135f..16df6c9 100644
+--- a/src/lib/actions/auth.ts
++++ b/src/lib/actions/auth.ts
+@@ -1,5 +1,6 @@
+ "use server";
+ import { redirect } from "next/navigation";
++import { skillsLine } from "@/lib/skills";
+ import { z } from "zod";
+ import { sql } from "@/lib/db";
+ import { createSession, destroySession, verifyPassword, hashPassword, SUSPENDED_MESSAGE } from "@/lib/auth";
+@@ -77,13 +78,13 @@ export async function logoutAction() {
+   redirect("/login");
+ }
+ 
+-/* ───────────── Photographer / videographer applications ───────────── */
++/* ───────────── Freelancer applications (photo / video / content) ───────────── */
+ const ApplySchema = z.object({
+   fullName: z.string().trim().min(3, "Enter your full name").max(80),
+   email: z.string().trim().email("Enter a valid email"),
+   phone: z.string().trim().min(7, "Enter a phone number").max(30),
+   password: z.string().min(8, "Use at least 8 characters"),
+-  discipline: z.enum(["photo", "video"], { message: "Choose photography or videography" }),
++  skills: z.array(z.enum(["photo", "video", "content"])).min(1, "Choose at least one").max(3),
+   homeAddress: z.string().trim().min(6, "Enter your home base address").max(200),
+   market: z.string().trim().min(2, "Choose the market you'll mostly work in"),
+   years: z.coerce.number().int().min(0, "Enter 0 or more").max(60),
+@@ -112,14 +113,14 @@ export async function applyToTeamAction(input: ApplyInput): Promise<ActionResult
+   const at = home && home !== "unavailable" ? home : null;
+   const hash = await hashPassword(d.password);
+   const userId = await sql.begin(async (tx) => {
+-    const [u] = await tx`insert into users (email, password_hash, role, full_name, phone) values (${d.email.toLowerCase()}, ${hash}, ${d.discipline === "photo" ? "photographer" : "videographer"}, ${d.fullName}, ${d.phone}) returning id`;
++    const [u] = await tx`insert into users (email, password_hash, role, full_name, phone) values (${d.email.toLowerCase()}, ${hash}, 'freelancer', ${d.fullName}, ${d.phone}) returning id`;
+     await tx`insert into user_settings (user_id) values (${u.id})`;
+-    await tx`insert into team_members (user_id, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, lat, lng, status, applied_at)
+-      values (${u.id}, ${d.discipline}, ${d.about}, ${market.id}, ${d.years}, ${d.portfolio}, ${d.instagram || null}, ${d.equipment || null}, ${d.homeAddress}, ${at?.lat ?? null}, ${at?.lng ?? null}, 'applicant', now())`;
++    await tx`insert into team_members (user_id, skills, discipline, bio, home_market_id, years_experience, portfolio_url, instagram, equipment, home_address, lat, lng, status, applied_at)
++      values (${u.id}, ${[...new Set(d.skills)]}, null, ${d.about}, ${market.id}, ${d.years}, ${d.portfolio}, ${d.instagram || null}, ${d.equipment || null}, ${d.homeAddress}, ${at?.lat ?? null}, ${at?.lng ?? null}, 'applicant', now())`;
+     return u.id as string;
+   });
+   const staff = await sql`select id from users where role in ('coordinator','admin') and status = 'active'`;
+-  for (const s of staff) await notify(s.id, "booking", `New ${d.discipline === "photo" ? "photographer" : "videographer"} application`, `${d.fullName} · ${d.years} years · ${d.portfolio}`, "/admin/people?tab=applicants");
++  for (const s of staff) await notify(s.id, "booking", `New application: ${skillsLine(d.skills).toLowerCase()}`, `${d.fullName} · ${d.years} years · ${d.portfolio}`, "/admin/people?tab=applicants");
+   await createSession(userId);
+   return { ok: true };
+ }
+diff --git a/src/lib/actions/booking.ts b/src/lib/actions/booking.ts
+index d95d0d8..4a1e9b0 100644
+--- a/src/lib/actions/booking.ts
++++ b/src/lib/actions/booking.ts
+@@ -1,5 +1,6 @@
+ "use server";
+ import { revalidatePath } from "next/cache";
++import { skillForRole, requirementsFor } from "@/lib/skills";
+ import { z } from "zod";
+ import { sql } from "@/lib/db";
+ import { getSession, requireUser } from "@/lib/auth";
+@@ -118,11 +119,12 @@ export async function createBookingAction(input: BookingDraft, card: CardInput):
+     if (pkg.photographers >= 2 || lines.some((l) => l.slug === "second-photographer")) slots.push("second_photo");
+     if (pkg.videographers >= 1 || lines.some((l) => l.slug === "highlight-video")) slots.push("lead_video");
+     if (pkg.videographers >= 2) slots.push("second_video");
++    if (lines.some((l) => l.slug === "content-creator")) slots.push("lead_content");
+     const expires = new Date(wDate); expires.setDate(expires.getDate() - 10);
+     for (const role of slots)
+       await tx`insert into wedding_assignments (wedding_id, role, status, compensation, coverage_hours, call_time, requirements, expires_at)
+         values (${w.id}, ${role}, 'open', ${compensationFor(role, hours)}, ${hours}, ${role.startsWith("second") ? at(0, 30) : at(0)},
+-                ${role.startsWith("lead") ? ["Lead experience", "Two camera bodies", "Black attire"] : ["Second-shooter experience", "Black attire"]}, ${expires.toISOString()})`;
++                ${requirementsFor(role)}, ${expires.toISOString()})`;
+ 
+     // Wedding thread with the coordinator
+     const [coord] = await tx`select id, full_name from users where role = 'coordinator' order by created_at limit 1`;
+@@ -139,8 +141,8 @@ export async function createBookingAction(input: BookingDraft, card: CardInput):
+   await notify(user.id, "payment", "Payment received", `We received your payment of $${chargeNow.toLocaleString()}.`, "/client/payments");
+   if (bookingNumber.coordId) await notify(bookingNumber.coordId, "booking", `New booking: ${bookingNumber.couple}`, `${pkg.name} · ${market.city} · ${d.date}`, "/admin");
+   // Let team members in that market know there's a new opportunity
+-  const disciplines = [...new Set(bookingNumber.slots.map((s) => (s.endsWith("photo") ? "photo" : "video")))];
+-  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and status = 'active' and discipline in ${sql(disciplines)}`;
++  const needed = [...new Set(bookingNumber.slots.map(skillForRole))];
++  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and status = 'active' and skills && ${needed}::text[]`;
+   // Place the venue on the map for team distances (in the background so checkout stays fast)
+   after(() => geocodeWedding(bookingNumber.weddingId).catch(() => {}));
+   for (const l of locals) await notify(l.user_id, "opportunity", "New wedding available", `${market.city}, ${market.state} · ${d.date} needs ${bookingNumber.slots.length} team member${bookingNumber.slots.length > 1 ? "s" : ""}.`, "/team/open");
+diff --git a/src/lib/actions/footage.ts b/src/lib/actions/footage.ts
+index 3c19619..160f190 100644
+--- a/src/lib/actions/footage.ts
++++ b/src/lib/actions/footage.ts
+@@ -9,7 +9,7 @@ const refresh = () => { revalidatePath("/team/uploads", "layout"); revalidatePat
+ 
+ /** Change the moment / camera a file is tagged with (uploader or coordinator). */
+ export async function retagUploadAction(id: string, input: { moment?: string | null; source?: string | null }): Promise<ActionResult> {
+-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const user = await requireUser(["freelancer", "coordinator", "admin"]);
+   const r = await up.retagUpload(user, id, input);
+   if (r.ok) refresh();
+   return { ok: r.ok, message: r.message };
+@@ -17,7 +17,7 @@ export async function retagUploadAction(id: string, input: { moment?: string | n
+ 
+ /** Add a timecode marker inside a clip, e.g. vows at 12:31. */
+ export async function addMarkerAction(uploadId: string, input: { time: string; beat: string; note?: string }): Promise<ActionResult<{ id: string; at: number }>> {
+-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const user = await requireUser(["freelancer", "coordinator", "admin"]);
+   const at = parseTimecode(input.time);
+   if (at === null) return { ok: false, message: "Enter a time like 12:31 or 1:02:45.", fieldErrors: { time: "Use mm:ss or h:mm:ss" } };
+   const r = await up.addMarker(user, uploadId, { at, beat: input.beat, note: input.note });
+@@ -26,7 +26,7 @@ export async function addMarkerAction(uploadId: string, input: { time: string; b
+ }
+ 
+ export async function deleteMarkerAction(markerId: string): Promise<ActionResult> {
+-  const user = await requireUser(["photographer", "videographer", "coordinator", "admin"]);
++  const user = await requireUser(["freelancer", "coordinator", "admin"]);
+   const r = await up.deleteMarker(user, markerId);
+   if (r.ok) refresh();
+   return r;
+diff --git a/src/lib/actions/people.ts b/src/lib/actions/people.ts
+index 25d5181..954ddd2 100644
+--- a/src/lib/actions/people.ts
++++ b/src/lib/actions/people.ts
+@@ -26,9 +26,13 @@ export async function reactivateUserAction(userId: string): Promise<ActionResult
+ }
+ export async function changeRoleAction(userId: string, role: string): Promise<ActionResult> {
+   const u = await requirePermission("people:manage");
+-  if (!["photographer", "videographer", "coordinator", "admin"].includes(role)) return { ok: false, message: "Choose a role." };
++  if (!["coordinator", "admin"].includes(role)) return { ok: false, message: "Choose a role." };
+   return done(await people.changeRole(u, userId, role));
+ }
++export async function setSkillsAction(userId: string, skills: string[]): Promise<ActionResult> {
++  const u = await requirePermission("people:manage");
++  return done(await people.setSkills(u, userId, skills));
++}
+ export async function resetPasswordAction(userId: string): Promise<ActionResult<{ temp: string }>> {
+   const u = await requirePermission("people:manage");
+   const r = await people.resetPassword(u, userId);
+diff --git a/src/lib/actions/team.ts b/src/lib/actions/team.ts
+index e521b18..1499271 100644
+--- a/src/lib/actions/team.ts
++++ b/src/lib/actions/team.ts
+@@ -13,7 +13,7 @@ import { acceptStandards } from "@/lib/services/standards";
+ import type { ActionResult } from "./types";
+ 
+ async function me() {
+-  const user = await requireUser(["photographer", "videographer"]);
++  const user = await requireUser(["freelancer"]);
+   const member = await team.getMember(user.id);
+   if (!member) throw new Error("Team profile not found.");
+   return { user, member };
+@@ -143,7 +143,7 @@ export async function submitLicenseAction(input: { docType: string; label?: stri
+ 
+ /* Team standards */
+ export async function acceptStandardsAction(input: { name: string; agree: boolean }): Promise<ActionResult> {
+-  const user = await requireUser(["photographer", "videographer"]);
++  const user = await requireUser(["freelancer"]);
+   const member = await team.getMember(user.id);
+   if (!member) return { ok: false, message: "Team profile not found." };
+   const r = await acceptStandards(member, { ...input, ...(await signatureMeta()) });
+@@ -156,6 +156,7 @@ export async function beginUploadAction(input: up.BeginInput) {
+   const user = await requireUser();
+   if (input.kind === "photo" && input.size > 200 * 1024 * 1024) return { ok: false as const, message: `${input.filename} is larger than 200 MB.` };
+   if (input.kind === "video" && input.size > 100 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 100 GB.` };
++  if (input.kind === "content" && input.size > 20 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 20 GB.` };
+   try {
+     const r = await up.beginUpload(user.id, input);
+     return { ok: true as const, ...r };
+@@ -196,6 +197,7 @@ const ProfileSchema = z.object({
+   avatar_url: z.string().optional(),
+   home_address: z.string().trim().max(200).optional().or(z.literal("")),
+   equipment: z.string().trim().max(600).optional().or(z.literal("")),
++  skills: z.array(z.enum(["photo", "video", "content"])).min(1, "Choose at least one: photographer, videographer or content creator.").max(3),
+ });
+ export async function updateProfileAction(input: z.input<typeof ProfileSchema>): Promise<ActionResult> {
+   const { member } = await me();
+@@ -206,6 +208,8 @@ export async function updateProfileAction(input: z.input<typeof ProfileSchema>):
+     return { ok: false, message: "Please fix the highlighted fields.", fieldErrors: fe };
+   }
+   if (p.data.avatar_url && p.data.avatar_url.length > 400_000) return { ok: false, message: "That photo is too large." };
++  const kept = await team.skillsInUse(member, p.data.skills);
++  if (kept.length) return { ok: false, message: `You have upcoming weddings as a ${kept.join(" and ").toLowerCase()} — keep that skill until they're done or released.`, fieldErrors: { skills: "Can't remove a skill you're booked for" } };
+   await team.updateProfile(member, { ...p.data, home_market_id: p.data.home_market_id || undefined, avatar_url: p.data.avatar_url === "" ? null : p.data.avatar_url || undefined } as never);
+   let message = "Profile saved";
+   if (p.data.home_address !== undefined && (p.data.home_address || null) !== member.home_address) {
+diff --git a/src/lib/client-upload.ts b/src/lib/client-upload.ts
+index 679eefc..21e2944 100644
+--- a/src/lib/client-upload.ts
++++ b/src/lib/client-upload.ts
+@@ -4,7 +4,7 @@ import { beginUploadAction, finishUploadAction } from "@/lib/actions/team";
+ import { sendXhr, dropboxSessionUpload } from "@/lib/dropbox-upload";
+ 
+ export type UploadMeta = {
+-  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null;
++  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "content" | "document"; category: string; retryOf?: string | null;
+   moment?: string | null; source?: string | null; cameraMarkers?: boolean;
+ };
+ export type UploadHandle = { id: string | null; promise: Promise<{ ok: boolean; id: string | null; error?: string; key?: string }>; cancel: () => void };
+diff --git a/src/lib/contract-fill.ts b/src/lib/contract-fill.ts
+index 5b48191..c283204 100644
+--- a/src/lib/contract-fill.ts
++++ b/src/lib/contract-fill.ts
+@@ -1,12 +1,13 @@
+ /** Fill contract placeholders. Pure — used on the server when signing and in the coordinator's preview. */
+ import { ROLE_LABEL, money } from "@/lib/pricing";
+ import { fmtLong, fmtTime } from "@/lib/utils";
++import { skillPerson, type Skill } from "@/lib/skills";
+ import { MILEAGE_FREE_MILES, MILEAGE_RATE, mileagePay } from "@/lib/geo";
+ 
+ export const COMPANY = "Visual Weddings";
+ 
+ export type ContractContext = {
+-  contractor_name: string; contractor_email: string; discipline: "photo" | "video";
++  contractor_name: string; contractor_email: string; discipline: Skill;
+   role: string; couple: string; wedding_date: string; venue: string; city: string; call_time: string | null; coverage_hours: number; compensation: number; miles: number | null;
+ };
+ 
+@@ -23,7 +24,7 @@ export function fillTemplate(text: string, c: ContractContext) {
+   const values: Record<string, string> = {
+     company: COMPANY,
+     contractor_name: c.contractor_name, contractor_email: c.contractor_email,
+-    discipline: c.discipline === "photo" ? "photographer" : "videographer",
++    discipline: skillPerson(c.discipline).toLowerCase(),
+     role: ROLE_LABEL[c.role] ?? c.role, couple: c.couple, wedding_date: fmtLong(c.wedding_date), venue: c.venue, city: c.city,
+     call_time: c.call_time ? fmtTime(c.call_time) : "to be confirmed", coverage_hours: String(c.coverage_hours), compensation: money(c.compensation),
+     mileage: mileageText(c.miles),
+diff --git a/src/lib/handbook-sync.ts b/src/lib/handbook-sync.ts
+index 1e65f70..dbbeebc 100644
+--- a/src/lib/handbook-sync.ts
++++ b/src/lib/handbook-sync.ts
+@@ -1,9 +1,11 @@
+ import type postgres from "postgres";
+ import { HANDBOOK } from "../content/handbook";
+ 
+-/** Articles whose built-in text changed with the footage/standards update (refreshed once per database). */
+-export const REFRESHED_ARTICLES = ["video-cheat-sheet", "footage-standards", "how-to-upload", "file-formats"];
+-const FLAG = "handbook_standards_v1";
++/** Built-in articles whose text changed in an update; each set is refreshed once per database, guarded by its flag. */
++export const REFRESHES: { flag: string; slugs: string[] }[] = [
++  { flag: "handbook_standards_v1", slugs: ["video-cheat-sheet", "footage-standards", "how-to-upload", "file-formats"] },
++  { flag: "handbook_freelancers_v1", slugs: ["shooting-standard", "tagging-footage", "how-to-upload"] },
++];
+ 
+ /**
+  * Brings an existing database's handbook up to date with src/content/handbook.ts without wiping it:
+@@ -11,7 +13,11 @@ const FLAG = "handbook_standards_v1";
+  * whose built-in text changed (once, guarded by an app flag). Runs on every build; safe to repeat.
+  */
+ export async function syncHandbook(sql: postgres.Sql) {
+-  const [{ fresh }] = await sql`insert into app_flags (key) values (${FLAG}) on conflict do nothing returning true as fresh`.then((r) => (r.length ? r : [{ fresh: false }]));
++  const refresh = new Set<string>();
++  for (const r of REFRESHES) {
++    const claimed = await sql`insert into app_flags (key) values (${r.flag}) on conflict do nothing returning key`;
++    if (claimed.length) r.slugs.forEach((x) => refresh.add(x));
++  }
+   let added = 0;
+   for (const [ci, c] of HANDBOOK.entries()) {
+     const [cat] = await sql`insert into handbook_categories (slug, title, description, icon, sort) values (${c.slug}, ${c.title}, ${c.description}, ${c.icon}, ${ci})
+@@ -21,9 +27,9 @@ export async function syncHandbook(sql: postgres.Sql) {
+         values (${cat.id}, ${a.slug}, ${a.title}, ${a.summary}, ${a.body}, ${a.audience ?? "all"}, ${a.minutes ?? 3}, ${ai})
+         on conflict (slug) do nothing returning id`;
+       if (row) added++;
+-      else if (fresh && REFRESHED_ARTICLES.includes(a.slug))
++      else if (refresh.has(a.slug))
+         await sql`update handbook_articles set title = ${a.title}, summary = ${a.summary}, body = ${a.body}, read_minutes = ${a.minutes ?? 3}, updated_at = now() where slug = ${a.slug}`;
+     }
+   }
+-  return { added, refreshed: fresh ? REFRESHED_ARTICLES.length : 0 };
++  return { added, refreshed: refresh.size };
+ }
+diff --git a/src/lib/permissions.ts b/src/lib/permissions.ts
+index a5f31e1..0bb4267 100644
+--- a/src/lib/permissions.ts
++++ b/src/lib/permissions.ts
+@@ -1,9 +1,9 @@
+-export type Role = "client" | "photographer" | "videographer" | "coordinator" | "admin";
++/** Team accounts are all "freelancer"; their skills (photo / video / content) live on team_members.skills. */
++export type Role = "client" | "freelancer" | "coordinator" | "admin";
+ 
+ export const PERMISSIONS: Record<Role, string[]> = {
+   client: ["booking:create", "wedding:view_own", "payment:make", "message:send", "deliverable:view"],
+-  photographer: ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send", "profile:edit"],
+-  videographer: ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send", "profile:edit"],
++  freelancer: ["availability:manage", "opportunity:accept", "wedding:view_assigned", "upload:create", "payout:view", "license:submit", "message:send", "profile:edit"],
+   coordinator: ["wedding:manage", "team:assign", "booking:manage", "license:review", "message:send", "handbook:edit", "payout:manage", "people:manage"],
+   admin: ["*"],
+ };
+@@ -13,7 +13,8 @@ export function can(role: Role, permission: string) {
+   return p.includes("*") || p.includes(permission);
+ }
+ 
+-export const isTeam = (role: Role) => role === "photographer" || role === "videographer";
++export const TEAM_ROLES: Role[] = ["freelancer"];
++export const isTeam = (role: Role) => role === "freelancer";
+ export const isStaff = (role: Role) => role === "coordinator" || role === "admin";
+ 
+ export function homeFor(role: Role) {
+diff --git a/src/lib/pricing.ts b/src/lib/pricing.ts
+index 91ec23a..1f2afe6 100644
+--- a/src/lib/pricing.ts
++++ b/src/lib/pricing.ts
+@@ -18,7 +18,7 @@ export function quote(opts: { packageBase: number; multiplier: number; addons: A
+ 
+ /** Team compensation for a slot. */
+ export function compensationFor(role: string, hours: number) {
+-  const hourly: Record<string, number> = { lead_photo: 115, second_photo: 60, lead_video: 125, second_video: 70 };
++  const hourly: Record<string, number> = { lead_photo: 115, second_photo: 60, lead_video: 125, second_video: 70, lead_content: 60 };
+   return Math.round(((hourly[role] ?? 80) * hours) / 25) * 25;
+ }
+ 
+@@ -27,6 +27,7 @@ export const ROLE_LABEL: Record<string, string> = {
+   second_photo: "Second Photographer",
+   lead_video: "Lead Videographer",
+   second_video: "Second Videographer",
++  lead_content: "Content Creator",
+ };
+ 
+ export function money(n: number, opts: { cents?: boolean } = {}) {
+diff --git a/src/lib/services/changes.ts b/src/lib/services/changes.ts
+index 5bcb085..e930618 100644
+--- a/src/lib/services/changes.ts
++++ b/src/lib/services/changes.ts
+@@ -23,6 +23,7 @@ export function slotsFor(pkg: Row, addonSlugs: string[]) {
+   if (pkg.photographers >= 2 || addonSlugs.includes("second-photographer")) slots.push("second_photo");
+   if (pkg.videographers >= 1 || addonSlugs.includes("highlight-video")) slots.push("lead_video");
+   if (pkg.videographers >= 2) slots.push("second_video");
++  if (addonSlugs.includes("content-creator")) slots.push("lead_content");
+   return slots;
+ }
+ export function coverageHours(pkgHours: number, addons: { slug: string; quantity: number }[]) {
+diff --git a/src/lib/services/contracts.ts b/src/lib/services/contracts.ts
+index 95261cf..529dd5d 100644
+--- a/src/lib/services/contracts.ts
++++ b/src/lib/services/contracts.ts
+@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
+ import { sql } from "@/lib/db";
+ import { DEFAULT_CONTRACT, LEGACY_CONTRACT_SHA, STANDARDS_ADDENDUM } from "@/content/contract";
+ import { weddingPlaces, placeLine } from "@/lib/venues";
++import { skillForRole } from "@/lib/skills";
+ 
+ type Db = typeof sql;
+ export { COMPANY } from "@/lib/contract-fill";
+@@ -60,7 +61,7 @@ export { fillTemplate, mileageText, type ContractContext } from "@/lib/contract-
+ import { fillTemplate, type ContractContext } from "@/lib/contract-fill";
+ 
+ /** Everything about a slot + member needed to fill the agreement. */
+-export async function contractContext(db: Db, assignmentId: string, member: { full_name: string; email: string; discipline: "photo" | "video" }, miles: number | null): Promise<ContractContext & { wedding_id: string } | null> {
++export async function contractContext(db: Db, assignmentId: string, member: { full_name: string; email: string }, miles: number | null): Promise<ContractContext & { wedding_id: string } | null> {
+   const [a] = await db`select a.role, a.call_time::text, a.coverage_hours, a.compensation, w.id as wedding_id, w.couple, w.wedding_date::text,
+       w.venue_name, w.venue_address, w.ceremony_location, w.reception_location, w.reception_venue_name, w.reception_venue_address, m.city, m.state
+     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
+@@ -70,7 +71,7 @@ export async function contractContext(db: Db, assignmentId: string, member: { fu
+     ? `${placeLine({ ...p.ceremony, area: null })}${p.ceremony.address ? `, ${p.ceremony.address}` : ""}`
+     : `Ceremony at ${p.ceremony.venue}${p.ceremony.address ? `, ${p.ceremony.address}` : ""}; reception at ${p.reception.venue}${p.reception.address ? `, ${p.reception.address}` : ""}`;
+   return {
+-    wedding_id: a.wedding_id, contractor_name: member.full_name, contractor_email: member.email, discipline: member.discipline,
++    wedding_id: a.wedding_id, contractor_name: member.full_name, contractor_email: member.email, discipline: skillForRole(a.role),
+     role: a.role, couple: a.couple, wedding_date: a.wedding_date, venue, city: `${a.city}, ${a.state}`, call_time: a.call_time,
+     coverage_hours: a.coverage_hours, compensation: a.compensation, miles,
+   };
+diff --git a/src/lib/services/me.ts b/src/lib/services/me.ts
+index 9d726de..e2ee63f 100644
+--- a/src/lib/services/me.ts
++++ b/src/lib/services/me.ts
+@@ -6,7 +6,7 @@ import { getMember } from "./team";
+ 
+ /** Current team member (photographer/videographer) for server components. */
+ export const currentMember = cache(async () => {
+-  const user = await requireUser(["photographer", "videographer"]);
++  const user = await requireUser(["freelancer"]);
+   const member = await getMember(user.id);
+   if (!member) redirect("/login");
+   return { user, member };
+diff --git a/src/lib/services/messages.ts b/src/lib/services/messages.ts
+index c54242d..ffa9952 100644
+--- a/src/lib/services/messages.ts
++++ b/src/lib/services/messages.ts
+@@ -56,11 +56,11 @@ export async function sendMessage(userId: string, conversationId: string, body:
+ }
+ 
+ const STAFF = ["coordinator", "admin"];
+-const TEAM = ["photographer", "videographer"];
++const TEAM = ["freelancer"];
+ 
+ /**
+  * Who may message whom:
+- * - coordinators, admins, photographers and videographers can message each other freely
++ * - coordinators, admins, freelancers (photo, video, content) can message each other freely
+  * - clients only ever talk to coordinators/admins — never directly to photographers or videographers
+  */
+ export async function startConversation(userId: string, subject: string, body: string, opts: { weddingId?: string | null; includeUserIds?: string[] } = {}) {
+@@ -86,13 +86,13 @@ export async function startConversation(userId: string, subject: string, body: s
+   return c.id as string;
+ }
+ 
+-export type Contact = { id: string; full_name: string; avatar_url: string | null; role: string };
++export type Contact = { id: string; full_name: string; avatar_url: string | null; role: string; skills: string[] | null };
+ /** People a user may start a thread with. Clients: coordinators/admins only. Everyone else: all active staff and team. */
+ export async function contactsFor(userId: string): Promise<Contact[]> {
+   const [me] = await sql`select role from users where id = ${userId}`;
+   const roles = me?.role === "client" ? STAFF : [...STAFF, ...TEAM];
+   return sql<Contact[]>`
+-    select u.id, u.full_name, u.avatar_url, u.role from users u left join team_members t on t.user_id = u.id
++    select u.id, u.full_name, u.avatar_url, u.role, t.skills from users u left join team_members t on t.user_id = u.id
+     where u.id <> ${userId} and u.status = 'active' and u.role in ${sql(roles)} and (t.id is null or t.status = 'active')
+     order by case when u.role in ('coordinator','admin') then 0 else 1 end, u.full_name`;
+ }
+@@ -111,7 +111,7 @@ const names = (rows: { full_name: string }[]) =>
+   rows.length <= 2 ? rows.map((r) => r.full_name).join(" and ") : `${rows.slice(0, -1).map((r) => r.full_name).join(", ")} and ${rows.at(-1)!.full_name}`;
+ 
+ /**
+- * Coordinators/admins can loop staff, photographers and videographers into an existing thread — including one with a client.
++ * Coordinators/admins can loop staff and freelancers into an existing thread — including one with a client.
+  * That's the only way a photographer/videographer ends up talking with a client. Clients are never added this way.
+  */
+ export async function addParticipants(actorId: string, conversationId: string, userIds: string[]) {
+diff --git a/src/lib/services/people.ts b/src/lib/services/people.ts
+index 5e71e0d..0a1f9ec 100644
+--- a/src/lib/services/people.ts
++++ b/src/lib/services/people.ts
+@@ -1,4 +1,5 @@
+ import "server-only";
++import { isSkill, skillForRole, skillPerson, skillsLine } from "@/lib/skills";
+ import { randomInt } from "node:crypto";
+ import { sql, num } from "@/lib/db";
+ import { hashPassword, revokeAllSessions } from "@/lib/auth";
+@@ -25,7 +26,7 @@ export async function listPeople(tab: PeopleTab, q: string): Promise<Record<stri
+   if (tab === "applicants" || tab === "team") {
+     const rows = await sql`
+       select u.id as user_id, u.full_name, u.email, u.phone, u.avatar_url, u.role, u.status as account_status, u.suspended_reason, u.created_at, ${lastSeen} as last_seen,
+-        t.id as member_id, t.status as member_status, t.discipline, t.years_experience, t.portfolio_url, t.instagram, t.website, t.bio, t.equipment, t.home_address, t.rating,
++        t.id as member_id, t.status as member_status, t.skills, t.years_experience, t.portfolio_url, t.instagram, t.website, t.bio, t.equipment, t.home_address, t.rating,
+         t.applied_at, t.decided_at, t.decision_note, m.city, m.state, ud.full_name as decided_by_name,
+         (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.team_member_id = t.id and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date)::int as upcoming,
+         (select count(*) from wedding_assignments a where a.team_member_id = t.id and a.status = 'completed')::int as completed,
+@@ -117,23 +118,29 @@ export async function reactivateUser(actor: Actor, userId: string) {
+   return { ok: true as const, message: `${u.full_name} can sign in again` };
+ }
+ 
++/** Freelancer skills (photo / video / content). Approval is per person, so this just changes what they can request. */
++export async function setSkills(actor: Actor, userId: string, skills: string[]) {
++  const u = await target(userId);
++  const err = guard(actor, u); if (err || !u) return { ok: false as const, message: err ?? "Account not found." };
++  if (u.role !== "freelancer" || !u.member_id) return { ok: false as const, message: "Only freelancers have skills." };
++  const next = [...new Set(skills.filter(isSkill))];
++  if (!next.length) return { ok: false as const, message: "Keep at least one skill." };
++  const rows = await sql`select distinct a.role from wedding_assignments a join weddings w on w.id = a.wedding_id
++    where a.team_member_id = ${u.member_id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date and w.status <> 'cancelled'`;
++  const busy = [...new Set(rows.map((r) => skillForRole(r.role)))].filter((s) => !next.includes(s));
++  if (busy.length) return { ok: false as const, message: `They have upcoming weddings as a ${busy.map(skillPerson).join(" and ").toLowerCase()}. Reassign those first.` };
++  await sql`update team_members set skills = ${next} where id = ${u.member_id}`;
++  return { ok: true as const, message: `${u.full_name}: ${skillsLine(next)}` };
++}
++
+ export async function changeRole(actor: Actor, userId: string, role: string) {
+   const u = await target(userId);
+   const err = guard(actor, u); if (err || !u) return { ok: false as const, message: err ?? "Account not found." };
+   if (u.role === role) return { ok: false as const, message: "That's already their role." };
+-  const team = ["photographer", "videographer"];
+-  if (team.includes(u.role) && team.includes(role)) {
+-    const [{ n }] = await sql`select count(*)::int as n from wedding_assignments a join weddings w on w.id = a.wedding_id
+-      where a.team_member_id = ${u.member_id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date`;
+-    if (n) return { ok: false as const, message: `They're on ${n} upcoming wedding${n > 1 ? "s" : ""} in their current role. Reassign those first.` };
+-    await sql.begin(async (tx) => {
+-      await tx`update users set role = ${role} where id = ${userId}`;
+-      await tx`update team_members set discipline = ${role === "photographer" ? "photo" : "video"} where id = ${u.member_id}`;
+-    });
+-  } else if (isStaffRole(u.role) && isStaffRole(role)) {
++  if (isStaffRole(u.role) && isStaffRole(role)) {
+     if (actor.role !== "admin") return { ok: false as const, message: "Only an administrator can change staff roles." };
+     await sql`update users set role = ${role} where id = ${userId}`;
+-  } else return { ok: false as const, message: "Roles can only change within the team (photographer ↔ videographer) or within staff (coordinator ↔ administrator)." };
++  } else return { ok: false as const, message: "Staff roles change between coordinator and administrator. For freelancers, edit their skills instead." };
+   await revokeAllSessions(userId); // pick up the new permissions on next sign-in
+   return { ok: true as const, message: `${u.full_name} is now ${role === "admin" ? "an administrator" : `a ${role}`}` };
+ }
+diff --git a/src/lib/services/staffing.ts b/src/lib/services/staffing.ts
+index d628e94..20f06f1 100644
+--- a/src/lib/services/staffing.ts
++++ b/src/lib/services/staffing.ts
+@@ -1,4 +1,5 @@
+ import "server-only";
++import { skillForRole } from "@/lib/skills";
+ import { STANDARDS_VERSION } from "@/content/standards";
+ import { sql, num } from "@/lib/db";
+ import { notify } from "./notifications";
+@@ -105,7 +106,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
+   const [a] = await db`select a.id, a.role, a.wedding_id, a.team_member_id, w.wedding_date::text as date, w.venue_lat, w.venue_lng, m.slug as market_slug
+     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
+   if (!a) return [];
+-  const discipline = a.role.endsWith("photo") ? "photo" : "video";
++  const skill = skillForRole(a.role);
+   const rows = await db`
+     select t.id, u.full_name, u.avatar_url, t.rating, t.lat, t.lng, mk.slug as market_slug, mk.city,
+       (select status from availability av where av.team_member_id = t.id and av.date = ${a.date}) as calendar,
+@@ -118,7 +119,7 @@ export async function candidatesFor(assignmentId: string, db: Db = sql): Promise
+       (select coalesce(json_agg(json_build_object('doc_type', l.doc_type, 'status', l.status, 'expires_on', l.expires_on)), '[]') from licenses l where l.team_member_id = t.id) as docs,
+       exists(select 1 from standards_acknowledgments s where s.team_member_id = t.id and s.version = ${STANDARDS_VERSION}) as standards_ok
+     from team_members t join users u on u.id = t.user_id left join markets mk on mk.id = t.home_market_id
+-    where t.discipline = ${discipline} and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
++    where ${skill} = any(t.skills) and t.status = 'active' and u.status = 'active' and t.id is distinct from ${a.team_member_id}`;
+   const venue = { lat: a.venue_lat, lng: a.venue_lng, market_slug: a.market_slug };
+   return rows.map((r) => {
+     const distance = distanceTo({ lat: r.lat, lng: r.lng, market_slug: r.market_slug }, venue);
+diff --git a/src/lib/services/team.ts b/src/lib/services/team.ts
+index c15302f..a19ede6 100644
+--- a/src/lib/services/team.ts
++++ b/src/lib/services/team.ts
+@@ -3,10 +3,11 @@ import { sql, num } from "@/lib/db";
+ import { notify } from "./notifications";
+ import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
+ import { activeTemplate, contractContext, recordSignature, voidContracts, normName, fillTemplate } from "./contracts";
++import { rolesForSkills, skillPerson, skillForRole, isSkill, type Skill } from "@/lib/skills";
+ import { standardsAcceptance, STANDARDS_REQUIRED_MESSAGE } from "./standards";
+ 
+ export type Member = {
+-  id: string; user_id: string; discipline: "photo" | "video"; bio: string | null; home_market_id: string | null;
++  id: string; user_id: string; skills: Skill[]; bio: string | null; home_market_id: string | null;
+   service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string | null;
+   instagram: string | null; website: string | null; rating: number; payout_method: string | null; payout_last4: string | null;
+   city: string | null; state: string | null; market_slug: string | null;
+@@ -20,10 +21,11 @@ export async function getMember(userId: string): Promise<Member | null> {
+     select tm.*, m.city, m.state, m.slug as market_slug, u.full_name, u.email, u.phone, u.avatar_url
+     from team_members tm join users u on u.id = tm.user_id left join markets m on m.id = tm.home_market_id
+     where tm.user_id = ${userId}`;
+-  return m ? ({ ...m, rating: num(m.rating), lat: m.lat == null ? null : num(m.lat), lng: m.lng == null ? null : num(m.lng) } as Member) : null;
++  return m ? ({ ...m, skills: (m.skills ?? []).filter(isSkill), rating: num(m.rating), lat: m.lat == null ? null : num(m.lat), lng: m.lng == null ? null : num(m.lng) } as Member) : null;
+ }
+ 
+-export const ROLE_PREFIX = (d: "photo" | "video") => (d === "photo" ? ["lead_photo", "second_photo"] : ["lead_video", "second_video"]);
++/** Slot roles this member can take, from their skills. */
++export const ROLE_PREFIX = (m: { skills: readonly string[] }) => rolesForSkills(m.skills);
+ 
+ /* ───────────── Assignments / weddings ───────────── */
+ export type AssignmentRow = {
+@@ -76,7 +78,7 @@ export async function weddingForMember(memberId: string, weddingId: string) {
+   if (!assignment) return null;
+   const [timeline, team, documents, questionnaire, uploads, conversation, client] = await Promise.all([
+     sql`select id, time::text, title, detail from wedding_timeline_items where wedding_id = ${weddingId} order by sort`,
+-    sql`select a.role, a.status, a.call_time::text, u.full_name, u.avatar_url, u.phone, tm.discipline, a.team_member_id = ${memberId} as is_me
++    sql`select a.role, a.status, a.call_time::text, u.full_name, u.avatar_url, u.phone, tm.skills, a.team_member_id = ${memberId} as is_me
+         from wedding_assignments a left join team_members tm on tm.id = a.team_member_id left join users u on u.id = tm.user_id
+         where a.wedding_id = ${weddingId} and a.status not in ('cancelled','expired','filled') order by a.role`,
+     sql`select id, type, title, content, created_at from documents where wedding_id = ${weddingId} and visibility in ('all','team') order by created_at`,
+@@ -109,7 +111,7 @@ export type Opportunity = AssignmentRow & {
+ };
+ 
+ export async function opportunities(member: Member) {
+-  const roles = ROLE_PREFIX(member.discipline);
++  const roles = ROLE_PREFIX(member);
+   const rows = await sql<(AssignmentRow & { declined: boolean; mine: boolean; conflict: boolean; calendar: string | null })[]>`
+     select ${assignmentSelect},
+       exists(select 1 from assignment_declines d where d.assignment_id = a.id and d.team_member_id = ${member.id}) as declined,
+@@ -162,7 +164,10 @@ export async function acceptOpportunity(member: Member, assignmentId: string, si
+       from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
+       where a.id = ${assignmentId} for update of a`;
+     if (!a || a.wstatus === "cancelled") return { ok: false as const, message: "This wedding is no longer available." };
+-    if (!ROLE_PREFIX(member.discipline).includes(a.role)) return { ok: false as const, message: "This role isn't open to your discipline." };
++    if (!ROLE_PREFIX(member).includes(a.role)) return { ok: false as const, message: `Add ${skillPerson(skillForRole(a.role)).toLowerCase()} to the skills on your profile to take this role.` };
++    // One role per person per wedding (e.g. not photographer and content creator at the same event)
++    const [already] = await db`select role from wedding_assignments where wedding_id = ${a.wid} and team_member_id = ${member.id} and id <> ${assignmentId} and status in ('accepted','pending','offered')`;
++    if (already) return { ok: false as const, message: "You already have a role on this wedding — one role per person per wedding." };
+     const offer = a.status === "offered" && a.team_member_id === member.id;
+     if (!offer) {
+       if (a.status !== "open") return { ok: false as const, message: a.status === "filled" || a.team_member_id ? "Sorry — someone else just took this wedding." : "This opportunity is no longer available." };
+@@ -446,7 +451,7 @@ export async function actionItems(member: Member) {
+     where a.team_member_id = ${member.id} and a.status in ('accepted','completed') and w.wedding_date between current_date - 14 and current_date - 1`;
+   for (const u of toUpload) {
+     if (u.ok === 0) items.push({ id: "up-" + u.id, title: `Upload files: ${u.couple}`, detail: "The 48-hour upload window has started.", href: `/team/uploads?wedding=${u.wid}`, tone: "danger", cta: "Upload" });
+-    else if (u.failed > 0) items.push({ id: "upf-" + u.id, title: `${u.failed} failed upload${u.failed > 1 ? "s" : ""}: ${u.couple}`, detail: "Retry failed files to complete delivery.", href: `/team/${member.discipline === "video" ? "uploads/video" : "uploads"}?wedding=${u.wid}`, tone: "warning", cta: "Retry" });
++    else if (u.failed > 0) items.push({ id: "upf-" + u.id, title: `${u.failed} failed upload${u.failed > 1 ? "s" : ""}: ${u.couple}`, detail: "Retry failed files to complete delivery.", href: `/team/uploads?wedding=${u.wid}`, tone: "warning", cta: "Retry" });
+   }
+   const payable = await payableAssignments(member.id);
+   for (const p of payable.filter((x) => x.uploads > 0)) items.push({ id: "pay-" + p.id, title: `Request payment: ${p.couple}`, detail: "Your uploads are in — request your payout.", href: "/team/payments", tone: "blush", cta: "Request" });
+@@ -472,11 +477,21 @@ export function profileCompletion(m: Member, licenseCount = 1) {
+   return { percent: Math.round((done / checks.length) * 100), missing: checks.filter((c) => !c[0]).map((c) => c[1]) };
+ }
+ 
+-export async function updateProfile(member: Member, p: Partial<{ full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null; home_address: string; equipment: string }>) {
++/** Skills the member is trying to drop while still holding upcoming slots for them. */
++export async function skillsInUse(member: Member, next: string[]) {
++  const dropped = member.skills.filter((s) => !next.includes(s));
++  if (!dropped.length) return [];
++  const rows = await sql`select distinct a.role from wedding_assignments a join weddings w on w.id = a.wedding_id
++    where a.team_member_id = ${member.id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date and w.status <> 'cancelled'`;
++  const busy = new Set(rows.map((r) => skillForRole(r.role)));
++  return dropped.filter((s) => busy.has(s)).map(skillPerson);
++}
++
++export async function updateProfile(member: Member, p: Partial<{ skills: string[]; full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null; home_address: string; equipment: string }>) {
+   await sql.begin(async (tx) => {
+     await tx`update users set full_name = coalesce(${p.full_name ?? null}, full_name), phone = ${p.phone ?? member.phone}, avatar_url = ${p.avatar_url === undefined ? member.avatar_url : p.avatar_url} where id = ${member.user_id}`;
+     await tx`update team_members set
+-      bio = ${p.bio ?? member.bio}, home_market_id = ${p.home_market_id ?? member.home_market_id}, service_radius = ${p.service_radius ?? member.service_radius},
++      skills = ${p.skills ?? member.skills}, bio = ${p.bio ?? member.bio}, home_market_id = ${p.home_market_id ?? member.home_market_id}, service_radius = ${p.service_radius ?? member.service_radius},
+       specialties = ${p.specialties ?? member.specialties}, years_experience = ${p.years_experience ?? member.years_experience}, languages = ${p.languages ?? member.languages},
+       portfolio_url = ${p.portfolio_url ?? member.portfolio_url}, instagram = ${p.instagram ?? member.instagram}, website = ${p.website ?? member.website},
+       home_address = ${p.home_address === undefined ? member.home_address : p.home_address || null}, equipment = ${p.equipment === undefined ? member.equipment : p.equipment || null}
+@@ -507,7 +522,7 @@ export async function signExisting(member: Member, assignmentId: string, sig: Si
+ export async function contractPreview(member: Member, assignmentId: string) {
+   const [a] = await sql`select a.id, a.role, a.status, a.team_member_id, a.travel_miles, w.venue_lat, w.venue_lng, m.slug as market_slug
+     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
+-  if (!a || !ROLE_PREFIX(member.discipline).includes(a.role)) return null;
++  if (!a || !ROLE_PREFIX(member).includes(a.role)) return null;
+   const visible = a.status === "open" || a.team_member_id === member.id;
+   if (!visible) return null;
+   const miles = a.team_member_id === member.id && a.travel_miles != null ? a.travel_miles : distanceTo(originOf(member), venueOf(a as never))?.miles ?? null;
+diff --git a/src/lib/services/uploads.ts b/src/lib/services/uploads.ts
+index ac303d8..3f33c70 100644
+--- a/src/lib/services/uploads.ts
++++ b/src/lib/services/uploads.ts
+@@ -3,6 +3,7 @@ import { sql } from "@/lib/db";
+ import { storage, storageKey } from "@/lib/storage";
+ import { safeName, dropboxConfig } from "@/lib/dropbox";
+ import { notify } from "./notifications";
++import { skillForRole, skillPerson } from "@/lib/skills";
+ import { momentLabel, isMoment, isSource, isAudioSource, SOURCE_LABEL, BEAT_LABEL, MARKER_BEATS, MOMENTS } from "@/content/footage";
+ 
+ export async function uploadableWeddings(memberId: string) {
+@@ -16,7 +17,7 @@ export async function uploadableWeddings(memberId: string) {
+     order by w.wedding_date desc`;
+ }
+ 
+-export async function listUploads(userId: string, kind: "photo" | "video", weddingId?: string) {
++export async function listUploads(userId: string, kind: "photo" | "video" | "content", weddingId?: string) {
+   // Video "processing" finishes ~2 minutes after upload in the demo pipeline.
+   await sql`update uploads set status = 'ready' where uploader_id = ${userId} and status = 'processing' and created_at < now() - interval '2 minutes'`;
+   return sql`select u.id, u.wedding_id, u.category, u.moment, u.source, u.camera_markers, u.filename, u.size_bytes, u.status, u.error, u.duration_seconds, u.created_at, w.couple,
+@@ -27,12 +28,13 @@ export async function listUploads(userId: string, kind: "photo" | "video", weddi
+ }
+ 
+ export type BeginInput = {
+-  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string;
++  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "content" | "document"; category: string;
+   filename: string; size: number; mime: string; retryOf?: string | null;
+   moment?: string | null; source?: string | null; cameraMarkers?: boolean;
+ };
+ 
+ const PHOTO_CATEGORY: Record<string, string> = { raw: "RAW", edited: "Edited", highlights: "Highlights" };
++const CONTENT_CATEGORY: Record<string, string> = { raw: "Raw clips & photos", finished: "Finished reels" };
+ 
+ /**
+  * Readable folder layout used when files live in Dropbox, e.g.
+@@ -40,7 +42,7 @@ const PHOTO_CATEGORY: Record<string, string> = { raw: "RAW", edited: "Edited", h
+  *   /Weddings/2026-10-10 Ade & Tolu [3f2a9c1b]/Photo/RAW/Whole day - mixed/Marcus Johnson · Main body/A_0001.CR3
+  */
+ export function readablePath(root: string, p: {
+-  kind: "photo" | "video" | "document"; category: string; filename: string; uploader: string;
++  kind: "photo" | "video" | "content" | "document"; category: string; filename: string; uploader: string;
+   wedding: { id: string; date: string; couple: string } | null; moment: string | null; source: string | null;
+ }) {
+   const file = safeName(p.filename, 140);
+@@ -51,6 +53,8 @@ export function readablePath(root: string, p: {
+   const shooter = p.source ? `${who} · ${safeName(SOURCE_LABEL[p.source] ?? p.source, 40)}` : who;
+   const parts = p.kind === "photo"
+     ? [root, wedding, "Photo", PHOTO_CATEGORY[p.category] ?? safeName(p.category), moment, shooter, file]
++    : p.kind === "content"
++    ? [root, wedding, "Content", CONTENT_CATEGORY[p.category] ?? safeName(p.category), moment, shooter, file]
+     : [root, wedding, "Video", moment, shooter, file];
+   return parts.join("/");
+ }
+@@ -83,18 +87,22 @@ async function keyFor(userId: string, input: Pick<BeginInput, "kind" | "category
+ 
+ function normalizeTags(input: Pick<BeginInput, "kind" | "category" | "moment" | "source">) {
+   if (input.kind === "document") return { category: input.category, moment: null, source: null };
+-  const moment = input.moment && isMoment(input.moment, input.kind === "photo") ? input.moment : null;
++  const mixedOk = input.kind === "photo" || input.kind === "content";
++  const moment = input.moment && isMoment(input.moment, mixedOk) ? input.moment : null;
+   const source = input.source && isSource(input.kind, input.source) ? input.source : null;
+   if (input.kind === "video" && !moment) throw new Error("Choose which part of the day this footage covers.");
+   // Video files are filed as footage or audio from their source; photos keep RAW / Edited / Highlights.
+-  const category = input.kind === "video" ? (isAudioSource(source) ? "audio" : "footage") : input.category;
++  const category = input.kind === "video" ? (isAudioSource(source) ? "audio" : "footage")
++    : input.kind === "content" ? (input.category === "finished" ? "finished" : "raw") : input.category;
+   return { category, moment, source };
+ }
+ 
+ export async function beginUpload(userId: string, input: BeginInput) {
+   if (input.assignmentId) {
+-    const [ok] = await sql`select 1 from wedding_assignments a join team_members t on t.id = a.team_member_id where a.id = ${input.assignmentId} and t.user_id = ${userId}`;
++    const [ok] = await sql`select a.role from wedding_assignments a join team_members t on t.id = a.team_member_id where a.id = ${input.assignmentId} and t.user_id = ${userId}`;
+     if (!ok) throw new Error("You're not assigned to this wedding.");
++    // What you upload follows your role on this wedding (photographer → photos, content creator → content…)
++    if (input.kind !== "document" && input.kind !== skillForRole(ok.role)) throw new Error(`You're the ${skillPerson(skillForRole(ok.role)).toLowerCase()} on this wedding — upload into that section.`);
+   }
+   const tags = normalizeTags(input);
+   const provider = storage();
+@@ -135,7 +143,7 @@ export async function batchSummary(userId: string, weddingId: string | null, okC
+   if (!weddingId || okCount + failCount === 0) return;
+   const [w] = await sql`select couple from weddings where id = ${weddingId}`;
+   await notify(userId, "upload", failCount ? "Upload finished with errors" : "Upload completed",
+-    `${okCount} ${kind} file${okCount === 1 ? "" : "s"} uploaded for ${w?.couple ?? "your wedding"}${failCount ? `, ${failCount} failed` : ""}.`, kind === "video" ? "/team/uploads/video" : "/team/uploads");
++    `${okCount} ${kind} file${okCount === 1 ? "" : "s"} uploaded for ${w?.couple ?? "your wedding"}${failCount ? `, ${failCount} failed` : ""}.`, `/team/uploads?wedding=${weddingId}`);
+ }
+ 
+ export async function deleteUpload(userId: string, id: string) {
+@@ -176,7 +184,7 @@ export async function retagUpload(user: { id: string; role: string }, id: string
+ export async function addMarker(user: { id: string; role: string }, uploadId: string, input: { at: number; beat: string; note?: string | null }) {
+   const u = await editableUpload(user, uploadId);
+   if (!u) return { ok: false as const, message: "Upload not found." };
+-  if (u.kind !== "video") return { ok: false as const, message: "Markers are for video and audio files." };
++  if (u.kind !== "video" && u.kind !== "content") return { ok: false as const, message: "Markers are for video, audio and content clips." };
+   if (!Number.isInteger(input.at) || input.at < 0) return { ok: false as const, message: "Enter a time like 12:31 or 1:02:45." };
+   if (u.duration_seconds && input.at > u.duration_seconds) return { ok: false as const, message: `This clip is only ${Math.floor(u.duration_seconds / 60)}m ${u.duration_seconds % 60}s long.` };
+   if (![...MARKER_BEATS, ...MOMENTS].some((b) => b.value === input.beat)) return { ok: false as const, message: "Choose what happens at this point." };
+@@ -196,7 +204,7 @@ export async function deleteMarker(user: { id: string; role: string }, markerId:
+ /* ───────────── Coordinator view ───────────── */
+ 
+ export type FootageRow = {
+-  id: string; kind: "photo" | "video"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
++  id: string; kind: "photo" | "video" | "content"; category: string; moment: string | null; source: string | null; camera_markers: boolean; filename: string;
+   size_bytes: number; status: string; duration_seconds: number | null; created_at: Date; uploader: string; storage_provider: string | null;
+   markers: { id: string; at: number; beat: string; note: string | null }[];
+ };
+@@ -207,7 +215,7 @@ export async function footageForWedding(weddingId: string) {
+       us.full_name as uploader, u.storage_provider,
+       coalesce((select json_agg(json_build_object('id', k.id, 'at', k.at_seconds, 'beat', k.beat, 'note', k.note) order by k.at_seconds) from upload_markers k where k.upload_id = u.id), '[]') as markers
+     from uploads u join users us on us.id = u.uploader_id
+-    where u.wedding_id = ${weddingId} and u.kind in ('photo','video') and u.status <> 'failed'
++    where u.wedding_id = ${weddingId} and u.kind in ('photo','video','content') and u.status <> 'failed'
+     order by u.created_at`;
+ }
+ 
+diff --git a/src/lib/skills.ts b/src/lib/skills.ts
+new file mode 100644
+index 0000000..7c99495
+--- /dev/null
++++ b/src/lib/skills.ts
+@@ -0,0 +1,37 @@
++/**
++ * Freelancer skills. One account (one email) can hold any mix of these and request any job that matches.
++ * Each wedding slot needs exactly one skill; a person works at most one slot per wedding.
++ */
++export type Skill = "photo" | "video" | "content";
++export const SKILLS: { value: Skill; label: string; person: string; plural: string }[] = [
++  { value: "photo", label: "Photography", person: "Photographer", plural: "Photographers" },
++  { value: "video", label: "Videography", person: "Videographer", plural: "Videographers" },
++  { value: "content", label: "Content creation", person: "Content creator", plural: "Content creators" },
++];
++export const SKILL_VALUES = SKILLS.map((s) => s.value);
++export const isSkill = (v: unknown): v is Skill => typeof v === "string" && (SKILL_VALUES as string[]).includes(v);
++export const skillPerson = (s: string) => SKILLS.find((x) => x.value === s)?.person ?? s;
++export const skillLabel = (s: string) => SKILLS.find((x) => x.value === s)?.label ?? s;
++
++/** Slot roles on a wedding, grouped by the skill they need. */
++export const SLOT_ROLES: Record<Skill, string[]> = {
++  photo: ["lead_photo", "second_photo"],
++  video: ["lead_video", "second_video"],
++  content: ["lead_content"],
++};
++export const ALL_SLOT_ROLES = Object.values(SLOT_ROLES).flat();
++export function skillForRole(role: string): Skill {
++  if (role.endsWith("photo")) return "photo";
++  if (role.endsWith("content")) return "content";
++  return "video";
++}
++/** Default requirements shown on a new open slot. */
++export function requirementsFor(role: string): string[] {
++  if (role === "lead_content") return ["Recent phone that shoots 4K", "Gimbal or stabiliser", "Social-first portfolio", "Black attire"];
++  return role.startsWith("lead") ? ["Lead experience", "Two camera bodies", "Black attire"] : ["Second-shooter experience", "Black attire"];
++}
++
++/** Slot roles a person with these skills can take. */
++export const rolesForSkills = (skills: readonly string[]) => skills.filter(isSkill).flatMap((s) => SLOT_ROLES[s]);
++/** "Photographer · Content creator" */
++export const skillsLine = (skills: readonly string[] | null | undefined) => (skills ?? []).filter(isSkill).map(skillPerson).join(" · ") || "Freelancer";

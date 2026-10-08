@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { sql } from "@/lib/db";
 import { DEFAULT_CONTRACT, LEGACY_CONTRACT_SHA, STANDARDS_ADDENDUM } from "@/content/contract";
 import { weddingPlaces, placeLine } from "@/lib/venues";
+import { skillForRole } from "@/lib/skills";
 
 type Db = typeof sql;
 export { COMPANY } from "@/lib/contract-fill";
@@ -60,7 +61,7 @@ export { fillTemplate, mileageText, type ContractContext } from "@/lib/contract-
 import { fillTemplate, type ContractContext } from "@/lib/contract-fill";
 
 /** Everything about a slot + member needed to fill the agreement. */
-export async function contractContext(db: Db, assignmentId: string, member: { full_name: string; email: string; discipline: "photo" | "video" }, miles: number | null): Promise<ContractContext & { wedding_id: string } | null> {
+export async function contractContext(db: Db, assignmentId: string, member: { full_name: string; email: string }, miles: number | null): Promise<ContractContext & { wedding_id: string } | null> {
   const [a] = await db`select a.role, a.call_time::text, a.coverage_hours, a.compensation, w.id as wedding_id, w.couple, w.wedding_date::text,
       w.venue_name, w.venue_address, w.ceremony_location, w.reception_location, w.reception_venue_name, w.reception_venue_address, m.city, m.state
     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
@@ -70,7 +71,7 @@ export async function contractContext(db: Db, assignmentId: string, member: { fu
     ? `${placeLine({ ...p.ceremony, area: null })}${p.ceremony.address ? `, ${p.ceremony.address}` : ""}`
     : `Ceremony at ${p.ceremony.venue}${p.ceremony.address ? `, ${p.ceremony.address}` : ""}; reception at ${p.reception.venue}${p.reception.address ? `, ${p.reception.address}` : ""}`;
   return {
-    wedding_id: a.wedding_id, contractor_name: member.full_name, contractor_email: member.email, discipline: member.discipline,
+    wedding_id: a.wedding_id, contractor_name: member.full_name, contractor_email: member.email, discipline: skillForRole(a.role),
     role: a.role, couple: a.couple, wedding_date: a.wedding_date, venue, city: `${a.city}, ${a.state}`, call_time: a.call_time,
     coverage_hours: a.coverage_hours, compensation: a.compensation, miles,
   };

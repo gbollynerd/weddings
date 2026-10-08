@@ -3,10 +3,11 @@ import { sql, num } from "@/lib/db";
 import { notify } from "./notifications";
 import { distanceTo, mileagePay, type Distance } from "@/lib/geo";
 import { activeTemplate, contractContext, recordSignature, voidContracts, normName, fillTemplate } from "./contracts";
+import { rolesForSkills, skillPerson, skillForRole, isSkill, type Skill } from "@/lib/skills";
 import { standardsAcceptance, STANDARDS_REQUIRED_MESSAGE } from "./standards";
 
 export type Member = {
-  id: string; user_id: string; discipline: "photo" | "video"; bio: string | null; home_market_id: string | null;
+  id: string; user_id: string; skills: Skill[]; bio: string | null; home_market_id: string | null;
   service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string | null;
   instagram: string | null; website: string | null; rating: number; payout_method: string | null; payout_last4: string | null;
   city: string | null; state: string | null; market_slug: string | null;
@@ -20,10 +21,11 @@ export async function getMember(userId: string): Promise<Member | null> {
     select tm.*, m.city, m.state, m.slug as market_slug, u.full_name, u.email, u.phone, u.avatar_url
     from team_members tm join users u on u.id = tm.user_id left join markets m on m.id = tm.home_market_id
     where tm.user_id = ${userId}`;
-  return m ? ({ ...m, rating: num(m.rating), lat: m.lat == null ? null : num(m.lat), lng: m.lng == null ? null : num(m.lng) } as Member) : null;
+  return m ? ({ ...m, skills: (m.skills ?? []).filter(isSkill), rating: num(m.rating), lat: m.lat == null ? null : num(m.lat), lng: m.lng == null ? null : num(m.lng) } as Member) : null;
 }
 
-export const ROLE_PREFIX = (d: "photo" | "video") => (d === "photo" ? ["lead_photo", "second_photo"] : ["lead_video", "second_video"]);
+/** Slot roles this member can take, from their skills. */
+export const ROLE_PREFIX = (m: { skills: readonly string[] }) => rolesForSkills(m.skills);
 
 /* ───────────── Assignments / weddings ───────────── */
 export type AssignmentRow = {
@@ -76,7 +78,7 @@ export async function weddingForMember(memberId: string, weddingId: string) {
   if (!assignment) return null;
   const [timeline, team, documents, questionnaire, uploads, conversation, client] = await Promise.all([
     sql`select id, time::text, title, detail from wedding_timeline_items where wedding_id = ${weddingId} order by sort`,
-    sql`select a.role, a.status, a.call_time::text, u.full_name, u.avatar_url, u.phone, tm.discipline, a.team_member_id = ${memberId} as is_me
+    sql`select a.role, a.status, a.call_time::text, u.full_name, u.avatar_url, u.phone, tm.skills, a.team_member_id = ${memberId} as is_me
         from wedding_assignments a left join team_members tm on tm.id = a.team_member_id left join users u on u.id = tm.user_id
         where a.wedding_id = ${weddingId} and a.status not in ('cancelled','expired','filled') order by a.role`,
     sql`select id, type, title, content, created_at from documents where wedding_id = ${weddingId} and visibility in ('all','team') order by created_at`,
@@ -109,7 +111,7 @@ export type Opportunity = AssignmentRow & {
 };
 
 export async function opportunities(member: Member) {
-  const roles = ROLE_PREFIX(member.discipline);
+  const roles = ROLE_PREFIX(member);
   const rows = await sql<(AssignmentRow & { declined: boolean; mine: boolean; conflict: boolean; calendar: string | null })[]>`
     select ${assignmentSelect},
       exists(select 1 from assignment_declines d where d.assignment_id = a.id and d.team_member_id = ${member.id}) as declined,
@@ -162,7 +164,10 @@ export async function acceptOpportunity(member: Member, assignmentId: string, si
       from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
       where a.id = ${assignmentId} for update of a`;
     if (!a || a.wstatus === "cancelled") return { ok: false as const, message: "This wedding is no longer available." };
-    if (!ROLE_PREFIX(member.discipline).includes(a.role)) return { ok: false as const, message: "This role isn't open to your discipline." };
+    if (!ROLE_PREFIX(member).includes(a.role)) return { ok: false as const, message: `Add ${skillPerson(skillForRole(a.role)).toLowerCase()} to the skills on your profile to take this role.` };
+    // One role per person per wedding (e.g. not photographer and content creator at the same event)
+    const [already] = await db`select role from wedding_assignments where wedding_id = ${a.wid} and team_member_id = ${member.id} and id <> ${assignmentId} and status in ('accepted','pending','offered')`;
+    if (already) return { ok: false as const, message: "You already have a role on this wedding — one role per person per wedding." };
     const offer = a.status === "offered" && a.team_member_id === member.id;
     if (!offer) {
       if (a.status !== "open") return { ok: false as const, message: a.status === "filled" || a.team_member_id ? "Sorry — someone else just took this wedding." : "This opportunity is no longer available." };
@@ -446,7 +451,7 @@ export async function actionItems(member: Member) {
     where a.team_member_id = ${member.id} and a.status in ('accepted','completed') and w.wedding_date between current_date - 14 and current_date - 1`;
   for (const u of toUpload) {
     if (u.ok === 0) items.push({ id: "up-" + u.id, title: `Upload files: ${u.couple}`, detail: "The 48-hour upload window has started.", href: `/team/uploads?wedding=${u.wid}`, tone: "danger", cta: "Upload" });
-    else if (u.failed > 0) items.push({ id: "upf-" + u.id, title: `${u.failed} failed upload${u.failed > 1 ? "s" : ""}: ${u.couple}`, detail: "Retry failed files to complete delivery.", href: `/team/${member.discipline === "video" ? "uploads/video" : "uploads"}?wedding=${u.wid}`, tone: "warning", cta: "Retry" });
+    else if (u.failed > 0) items.push({ id: "upf-" + u.id, title: `${u.failed} failed upload${u.failed > 1 ? "s" : ""}: ${u.couple}`, detail: "Retry failed files to complete delivery.", href: `/team/uploads?wedding=${u.wid}`, tone: "warning", cta: "Retry" });
   }
   const payable = await payableAssignments(member.id);
   for (const p of payable.filter((x) => x.uploads > 0)) items.push({ id: "pay-" + p.id, title: `Request payment: ${p.couple}`, detail: "Your uploads are in — request your payout.", href: "/team/payments", tone: "blush", cta: "Request" });
@@ -472,11 +477,21 @@ export function profileCompletion(m: Member, licenseCount = 1) {
   return { percent: Math.round((done / checks.length) * 100), missing: checks.filter((c) => !c[0]).map((c) => c[1]) };
 }
 
-export async function updateProfile(member: Member, p: Partial<{ full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null; home_address: string; equipment: string }>) {
+/** Skills the member is trying to drop while still holding upcoming slots for them. */
+export async function skillsInUse(member: Member, next: string[]) {
+  const dropped = member.skills.filter((s) => !next.includes(s));
+  if (!dropped.length) return [];
+  const rows = await sql`select distinct a.role from wedding_assignments a join weddings w on w.id = a.wedding_id
+    where a.team_member_id = ${member.id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date and w.status <> 'cancelled'`;
+  const busy = new Set(rows.map((r) => skillForRole(r.role)));
+  return dropped.filter((s) => busy.has(s)).map(skillPerson);
+}
+
+export async function updateProfile(member: Member, p: Partial<{ skills: string[]; full_name: string; phone: string; bio: string; home_market_id: string; service_radius: number; specialties: string[]; years_experience: number; languages: string[]; portfolio_url: string; instagram: string; website: string; avatar_url: string | null; home_address: string; equipment: string }>) {
   await sql.begin(async (tx) => {
     await tx`update users set full_name = coalesce(${p.full_name ?? null}, full_name), phone = ${p.phone ?? member.phone}, avatar_url = ${p.avatar_url === undefined ? member.avatar_url : p.avatar_url} where id = ${member.user_id}`;
     await tx`update team_members set
-      bio = ${p.bio ?? member.bio}, home_market_id = ${p.home_market_id ?? member.home_market_id}, service_radius = ${p.service_radius ?? member.service_radius},
+      skills = ${p.skills ?? member.skills}, bio = ${p.bio ?? member.bio}, home_market_id = ${p.home_market_id ?? member.home_market_id}, service_radius = ${p.service_radius ?? member.service_radius},
       specialties = ${p.specialties ?? member.specialties}, years_experience = ${p.years_experience ?? member.years_experience}, languages = ${p.languages ?? member.languages},
       portfolio_url = ${p.portfolio_url ?? member.portfolio_url}, instagram = ${p.instagram ?? member.instagram}, website = ${p.website ?? member.website},
       home_address = ${p.home_address === undefined ? member.home_address : p.home_address || null}, equipment = ${p.equipment === undefined ? member.equipment : p.equipment || null}
@@ -507,7 +522,7 @@ export async function signExisting(member: Member, assignmentId: string, sig: Si
 export async function contractPreview(member: Member, assignmentId: string) {
   const [a] = await sql`select a.id, a.role, a.status, a.team_member_id, a.travel_miles, w.venue_lat, w.venue_lng, m.slug as market_slug
     from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id where a.id = ${assignmentId}`;
-  if (!a || !ROLE_PREFIX(member.discipline).includes(a.role)) return null;
+  if (!a || !ROLE_PREFIX(member).includes(a.role)) return null;
   const visible = a.status === "open" || a.team_member_id === member.id;
   if (!visible) return null;
   const miles = a.team_member_id === member.id && a.travel_miles != null ? a.travel_miles : distanceTo(originOf(member), venueOf(a as never))?.miles ?? null;

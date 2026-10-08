@@ -60,10 +60,16 @@ export const SOURCES = {
     { value: "body_1", label: "Main body" },
     { value: "body_2", label: "Second body" },
   ],
+  content: [
+    { value: "phone_1", label: "Main phone" },
+    { value: "phone_2", label: "Second phone" },
+    { value: "content_camera", label: "Camera" },
+    { value: "action_cam", label: "Action cam" },
+  ],
 } as const;
-export const SOURCE_LABEL: Record<string, string> = Object.fromEntries([...SOURCES.video, ...SOURCES.photo].map((s) => [s.value, s.label]));
+export const SOURCE_LABEL: Record<string, string> = Object.fromEntries([...SOURCES.video, ...SOURCES.photo, ...SOURCES.content].map((s) => [s.value, s.label]));
 export const isAudioSource = (s: string | null | undefined) => !!s && s.startsWith("audio_");
-export const isSource = (kind: "photo" | "video" | "document", v: string) => kind !== "document" && SOURCES[kind].some((s) => s.value === v);
+export const isSource = (kind: "photo" | "video" | "content" | "document", v: string) => kind !== "document" && SOURCES[kind].some((s) => s.value === v);
 
 /** Parses "1:02:03", "02:03", "2:03.5" or plain seconds into whole seconds. */
 export function parseTimecode(input: string): number | null {

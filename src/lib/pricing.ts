@@ -18,7 +18,7 @@ export function quote(opts: { packageBase: number; multiplier: number; addons: A
 
 /** Team compensation for a slot. */
 export function compensationFor(role: string, hours: number) {
-  const hourly: Record<string, number> = { lead_photo: 115, second_photo: 60, lead_video: 125, second_video: 70 };
+  const hourly: Record<string, number> = { lead_photo: 115, second_photo: 60, lead_video: 125, second_video: 70, lead_content: 60 };
   return Math.round(((hourly[role] ?? 80) * hours) / 25) * 25;
 }
 
@@ -27,6 +27,7 @@ export const ROLE_LABEL: Record<string, string> = {
   second_photo: "Second Photographer",
   lead_video: "Lead Videographer",
   second_video: "Second Videographer",
+  lead_content: "Content Creator",
 };
 
 export function money(n: number, opts: { cents?: boolean } = {}) {

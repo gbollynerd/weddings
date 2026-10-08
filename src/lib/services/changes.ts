@@ -23,6 +23,7 @@ export function slotsFor(pkg: Row, addonSlugs: string[]) {
   if (pkg.photographers >= 2 || addonSlugs.includes("second-photographer")) slots.push("second_photo");
   if (pkg.videographers >= 1 || addonSlugs.includes("highlight-video")) slots.push("lead_video");
   if (pkg.videographers >= 2) slots.push("second_video");
+  if (addonSlugs.includes("content-creator")) slots.push("lead_content");
   return slots;
 }
 export function coverageHours(pkgHours: number, addons: { slug: string; quantity: number }[]) {

@@ -1,4 +1,5 @@
 import "server-only";
+import { isSkill, skillForRole, skillPerson, skillsLine } from "@/lib/skills";
 import { randomInt } from "node:crypto";
 import { sql, num } from "@/lib/db";
 import { hashPassword, revokeAllSessions } from "@/lib/auth";
@@ -25,7 +26,7 @@ export async function listPeople(tab: PeopleTab, q: string): Promise<Record<stri
   if (tab === "applicants" || tab === "team") {
     const rows = await sql`
       select u.id as user_id, u.full_name, u.email, u.phone, u.avatar_url, u.role, u.status as account_status, u.suspended_reason, u.created_at, ${lastSeen} as last_seen,
-        t.id as member_id, t.status as member_status, t.discipline, t.years_experience, t.portfolio_url, t.instagram, t.website, t.bio, t.equipment, t.home_address, t.rating,
+        t.id as member_id, t.status as member_status, t.skills, t.years_experience, t.portfolio_url, t.instagram, t.website, t.bio, t.equipment, t.home_address, t.rating,
         t.applied_at, t.decided_at, t.decision_note, m.city, m.state, ud.full_name as decided_by_name,
         (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.team_member_id = t.id and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date)::int as upcoming,
         (select count(*) from wedding_assignments a where a.team_member_id = t.id and a.status = 'completed')::int as completed,
@@ -117,23 +118,29 @@ export async function reactivateUser(actor: Actor, userId: string) {
   return { ok: true as const, message: `${u.full_name} can sign in again` };
 }
 
+/** Freelancer skills (photo / video / content). Approval is per person, so this just changes what they can request. */
+export async function setSkills(actor: Actor, userId: string, skills: string[]) {
+  const u = await target(userId);
+  const err = guard(actor, u); if (err || !u) return { ok: false as const, message: err ?? "Account not found." };
+  if (u.role !== "freelancer" || !u.member_id) return { ok: false as const, message: "Only freelancers have skills." };
+  const next = [...new Set(skills.filter(isSkill))];
+  if (!next.length) return { ok: false as const, message: "Keep at least one skill." };
+  const rows = await sql`select distinct a.role from wedding_assignments a join weddings w on w.id = a.wedding_id
+    where a.team_member_id = ${u.member_id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date and w.status <> 'cancelled'`;
+  const busy = [...new Set(rows.map((r) => skillForRole(r.role)))].filter((s) => !next.includes(s));
+  if (busy.length) return { ok: false as const, message: `They have upcoming weddings as a ${busy.map(skillPerson).join(" and ").toLowerCase()}. Reassign those first.` };
+  await sql`update team_members set skills = ${next} where id = ${u.member_id}`;
+  return { ok: true as const, message: `${u.full_name}: ${skillsLine(next)}` };
+}
+
 export async function changeRole(actor: Actor, userId: string, role: string) {
   const u = await target(userId);
   const err = guard(actor, u); if (err || !u) return { ok: false as const, message: err ?? "Account not found." };
   if (u.role === role) return { ok: false as const, message: "That's already their role." };
-  const team = ["photographer", "videographer"];
-  if (team.includes(u.role) && team.includes(role)) {
-    const [{ n }] = await sql`select count(*)::int as n from wedding_assignments a join weddings w on w.id = a.wedding_id
-      where a.team_member_id = ${u.member_id} and a.status in ('accepted','pending','offered') and w.wedding_date >= current_date`;
-    if (n) return { ok: false as const, message: `They're on ${n} upcoming wedding${n > 1 ? "s" : ""} in their current role. Reassign those first.` };
-    await sql.begin(async (tx) => {
-      await tx`update users set role = ${role} where id = ${userId}`;
-      await tx`update team_members set discipline = ${role === "photographer" ? "photo" : "video"} where id = ${u.member_id}`;
-    });
-  } else if (isStaffRole(u.role) && isStaffRole(role)) {
+  if (isStaffRole(u.role) && isStaffRole(role)) {
     if (actor.role !== "admin") return { ok: false as const, message: "Only an administrator can change staff roles." };
     await sql`update users set role = ${role} where id = ${userId}`;
-  } else return { ok: false as const, message: "Roles can only change within the team (photographer ↔ videographer) or within staff (coordinator ↔ administrator)." };
+  } else return { ok: false as const, message: "Staff roles change between coordinator and administrator. For freelancers, edit their skills instead." };
   await revokeAllSessions(userId); // pick up the new permissions on next sign-in
   return { ok: true as const, message: `${u.full_name} is now ${role === "admin" ? "an administrator" : `a ${role}`}` };
 }

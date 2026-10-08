@@ -26,8 +26,12 @@ export async function reactivateUserAction(userId: string): Promise<ActionResult
 }
 export async function changeRoleAction(userId: string, role: string): Promise<ActionResult> {
   const u = await requirePermission("people:manage");
-  if (!["photographer", "videographer", "coordinator", "admin"].includes(role)) return { ok: false, message: "Choose a role." };
+  if (!["coordinator", "admin"].includes(role)) return { ok: false, message: "Choose a role." };
   return done(await people.changeRole(u, userId, role));
+}
+export async function setSkillsAction(userId: string, skills: string[]): Promise<ActionResult> {
+  const u = await requirePermission("people:manage");
+  return done(await people.setSkills(u, userId, skills));
 }
 export async function resetPasswordAction(userId: string): Promise<ActionResult<{ temp: string }>> {
   const u = await requirePermission("people:manage");

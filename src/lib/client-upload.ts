@@ -4,7 +4,7 @@ import { beginUploadAction, finishUploadAction } from "@/lib/actions/team";
 import { sendXhr, dropboxSessionUpload } from "@/lib/dropbox-upload";
 
 export type UploadMeta = {
-  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "document"; category: string; retryOf?: string | null;
+  weddingId: string | null; assignmentId: string | null; kind: "photo" | "video" | "content" | "document"; category: string; retryOf?: string | null;
   moment?: string | null; source?: string | null; cameraMarkers?: boolean;
 };
 export type UploadHandle = { id: string | null; promise: Promise<{ ok: boolean; id: string | null; error?: string; key?: string }>; cancel: () => void };

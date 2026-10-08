@@ -13,7 +13,7 @@ import { acceptStandards } from "@/lib/services/standards";
 import type { ActionResult } from "./types";
 
 async function me() {
-  const user = await requireUser(["photographer", "videographer"]);
+  const user = await requireUser(["freelancer"]);
   const member = await team.getMember(user.id);
   if (!member) throw new Error("Team profile not found.");
   return { user, member };
@@ -143,7 +143,7 @@ export async function submitLicenseAction(input: { docType: string; label?: stri
 
 /* Team standards */
 export async function acceptStandardsAction(input: { name: string; agree: boolean }): Promise<ActionResult> {
-  const user = await requireUser(["photographer", "videographer"]);
+  const user = await requireUser(["freelancer"]);
   const member = await team.getMember(user.id);
   if (!member) return { ok: false, message: "Team profile not found." };
   const r = await acceptStandards(member, { ...input, ...(await signatureMeta()) });
@@ -156,6 +156,7 @@ export async function beginUploadAction(input: up.BeginInput) {
   const user = await requireUser();
   if (input.kind === "photo" && input.size > 200 * 1024 * 1024) return { ok: false as const, message: `${input.filename} is larger than 200 MB.` };
   if (input.kind === "video" && input.size > 100 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 100 GB.` };
+  if (input.kind === "content" && input.size > 20 * 1024 ** 3) return { ok: false as const, message: `${input.filename} is larger than 20 GB.` };
   try {
     const r = await up.beginUpload(user.id, input);
     return { ok: true as const, ...r };
@@ -196,6 +197,7 @@ const ProfileSchema = z.object({
   avatar_url: z.string().optional(),
   home_address: z.string().trim().max(200).optional().or(z.literal("")),
   equipment: z.string().trim().max(600).optional().or(z.literal("")),
+  skills: z.array(z.enum(["photo", "video", "content"])).min(1, "Choose at least one: photographer, videographer or content creator.").max(3),
 });
 export async function updateProfileAction(input: z.input<typeof ProfileSchema>): Promise<ActionResult> {
   const { member } = await me();
@@ -206,6 +208,8 @@ export async function updateProfileAction(input: z.input<typeof ProfileSchema>):
     return { ok: false, message: "Please fix the highlighted fields.", fieldErrors: fe };
   }
   if (p.data.avatar_url && p.data.avatar_url.length > 400_000) return { ok: false, message: "That photo is too large." };
+  const kept = await team.skillsInUse(member, p.data.skills);
+  if (kept.length) return { ok: false, message: `You have upcoming weddings as a ${kept.join(" and ").toLowerCase()} — keep that skill until they're done or released.`, fieldErrors: { skills: "Can't remove a skill you're booked for" } };
   await team.updateProfile(member, { ...p.data, home_market_id: p.data.home_market_id || undefined, avatar_url: p.data.avatar_url === "" ? null : p.data.avatar_url || undefined } as never);
   let message = "Profile saved";
   if (p.data.home_address !== undefined && (p.data.home_address || null) !== member.home_address) {

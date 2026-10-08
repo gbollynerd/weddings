@@ -1,5 +1,6 @@
 "use server";
 import { revalidatePath } from "next/cache";
+import { skillForRole, requirementsFor } from "@/lib/skills";
 import { z } from "zod";
 import { sql } from "@/lib/db";
 import { getSession, requireUser } from "@/lib/auth";
@@ -118,11 +119,12 @@ export async function createBookingAction(input: BookingDraft, card: CardInput):
     if (pkg.photographers >= 2 || lines.some((l) => l.slug === "second-photographer")) slots.push("second_photo");
     if (pkg.videographers >= 1 || lines.some((l) => l.slug === "highlight-video")) slots.push("lead_video");
     if (pkg.videographers >= 2) slots.push("second_video");
+    if (lines.some((l) => l.slug === "content-creator")) slots.push("lead_content");
     const expires = new Date(wDate); expires.setDate(expires.getDate() - 10);
     for (const role of slots)
       await tx`insert into wedding_assignments (wedding_id, role, status, compensation, coverage_hours, call_time, requirements, expires_at)
         values (${w.id}, ${role}, 'open', ${compensationFor(role, hours)}, ${hours}, ${role.startsWith("second") ? at(0, 30) : at(0)},
-                ${role.startsWith("lead") ? ["Lead experience", "Two camera bodies", "Black attire"] : ["Second-shooter experience", "Black attire"]}, ${expires.toISOString()})`;
+                ${requirementsFor(role)}, ${expires.toISOString()})`;
 
     // Wedding thread with the coordinator
     const [coord] = await tx`select id, full_name from users where role = 'coordinator' order by created_at limit 1`;
@@ -139,8 +141,8 @@ export async function createBookingAction(input: BookingDraft, card: CardInput):
   await notify(user.id, "payment", "Payment received", `We received your payment of $${chargeNow.toLocaleString()}.`, "/client/payments");
   if (bookingNumber.coordId) await notify(bookingNumber.coordId, "booking", `New booking: ${bookingNumber.couple}`, `${pkg.name} · ${market.city} · ${d.date}`, "/admin");
   // Let team members in that market know there's a new opportunity
-  const disciplines = [...new Set(bookingNumber.slots.map((s) => (s.endsWith("photo") ? "photo" : "video")))];
-  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and status = 'active' and discipline in ${sql(disciplines)}`;
+  const needed = [...new Set(bookingNumber.slots.map(skillForRole))];
+  const locals = await sql`select user_id from team_members where home_market_id = ${market.id} and status = 'active' and skills && ${needed}::text[]`;
   // Place the venue on the map for team distances (in the background so checkout stays fast)
   after(() => geocodeWedding(bookingNumber.weddingId).catch(() => {}));
   for (const l of locals) await notify(l.user_id, "opportunity", "New wedding available", `${market.city}, ${market.state} · ${d.date} needs ${bookingNumber.slots.length} team member${bookingNumber.slots.length > 1 ? "s" : ""}.`, "/team/open");

@@ -17,7 +17,9 @@ export function MarkersModal({ open, onClose, upload, readOnly }: {
 }) {
   const router = useRouter();
   const toast = useToast();
-  const [markers, setMarkers] = React.useState<Marker[]>([]);
+  // Mounted fresh for each file (callers pass key={upload.id}), so state starts from the props — no reset effect
+  // that could wipe what someone has already started typing.
+  const [markers, setMarkers] = React.useState<Marker[]>(upload?.markers ?? []);
   const [time, setTime] = React.useState("");
   const [beat, setBeat] = React.useState<string>(MARKER_BEATS[0].value);
   const [note, setNote] = React.useState("");
@@ -25,9 +27,6 @@ export function MarkersModal({ open, onClose, upload, readOnly }: {
   const [busy, setBusy] = React.useState(false);
   const changed = React.useRef(false);
 
-  React.useEffect(() => {
-    if (open && upload) { setMarkers(upload.markers); setTime(""); setNote(""); setError(null); changed.current = false; }
-  }, [open, upload]);
 
   const close = () => { onClose(); if (changed.current) router.refresh(); };
   const add = async () => {

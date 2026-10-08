@@ -16,7 +16,7 @@ export default async function OpenWeddingsPage({ searchParams }: { searchParams:
   return (
     <OpenWeddingsBoard
       initialId={sp.id}
-      discipline={member.discipline}
+      skills={member.skills}
       homeCity={member.city ?? ""}
       homeLabel={member.lat != null ? "your home base" : member.city ? `${member.city} (add your home address in Profile for exact distances)` : "your home market"}
       memberName={member.full_name}

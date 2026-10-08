@@ -34,7 +34,7 @@ export default async function AdminHome() {
         where p.status in ('pending','processing','on_hold') order by p.requested_at`,
     sql`select a.id, a.role, a.compensation, w.id as wedding_id, w.couple, w.wedding_date::text, m.city, m.state, a.expires_at from wedding_assignments a join weddings w on w.id = a.wedding_id join markets m on m.id = w.market_id
         where a.status = 'open' and w.wedding_date >= current_date order by w.wedding_date limit 20`,
-    sql`select u.full_name, u.avatar_url, t.discipline, m.city, t.rating,
+    sql`select u.full_name, u.avatar_url, t.skills, m.city, t.rating,
           (select count(*) from wedding_assignments a join weddings w on w.id = a.wedding_id where a.team_member_id = t.id and a.status = 'accepted' and w.wedding_date >= current_date)::int as upcoming
         from team_members t join users u on u.id = t.user_id left join markets m on m.id = t.home_market_id order by u.full_name`,
     sql`select r.id, r.kind, r.note, r.created_at, r.from_date::text, r.to_date::text, r.total_before, r.total_after, r.removed_addons, r.payload, r.before,
