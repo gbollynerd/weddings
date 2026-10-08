@@ -2,13 +2,18 @@
 import * as React from "react";
 import type { Skill } from "@/lib/skills";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Camera, Video, Smartphone } from "lucide-react";
+import { AlertCircle, Camera, Video, Smartphone, Check } from "lucide-react";
 import { Field, Input, Textarea, Select, Alert, Button, Checkbox } from "@/components/ui";
 import { AddressInput } from "@/components/ui/address-input";
 import { applyToTeamAction, type ApplyInput } from "@/lib/actions/auth";
 import { cn } from "@/lib/utils";
 
 type F = { fullName: string; email: string; phone: string; password: string; skills: Skill[]; homeAddress: string; market: string; years: string; portfolio: string; instagram: string; about: string; equipment: string; agree: boolean };
+const SKILL_CARDS = [
+  { value: "photo", label: "Photographer", blurb: "Lead or second shooter — portraits, candids, family formals", icon: Camera },
+  { value: "video", label: "Videographer", blurb: "Films, ceremony and speech coverage, audio, drone", icon: Video },
+  { value: "content", label: "Content creator", blurb: "Phone-first reels, behind-the-scenes and same-day teasers", icon: Smartphone },
+] as const;
 const EMPTY: F = { fullName: "", email: "", phone: "", password: "", skills: [], homeAddress: "", market: "", years: "", portfolio: "", instagram: "", about: "", equipment: "", agree: false };
 
 export function JoinForm({ markets }: { markets: { slug: string; label: string }[] }) {
@@ -32,21 +37,6 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
   return (
     <form onSubmit={submit} className="mt-8 space-y-4" noValidate>
       {msg && <Alert tone="danger" icon={AlertCircle}>{msg}</Alert>}
-      <fieldset>
-        <legend className="mb-1.5 text-[13px] font-medium text-midnight-700">I work as <span className="text-blush-500">*</span> <span className="font-normal text-muted">— choose all that apply</span></legend>
-        <div className="grid gap-2 sm:grid-cols-3" role="group">
-          {([["photo", "Photographer", Camera], ["video", "Videographer", Video], ["content", "Content creator", Smartphone]] as const).map(([v, label, I]) => {
-            const on = f.skills.includes(v);
-            return (
-              <label key={v} className={cn("flex cursor-pointer items-center gap-2 rounded-2xl border p-3 text-sm font-medium transition", on ? "border-midnight-900 ring-2 ring-midnight-900/10" : "border-line hover:border-midnight-200")}>
-                <input type="checkbox" name="skills" value={v} checked={on} onChange={() => set("skills", on ? f.skills.filter((x) => x !== v) : [...f.skills, v])} className="size-4 accent-midnight-900" />
-                <I className="size-4 text-midnight-500" />{label}
-              </label>
-            );
-          })}
-        </div>
-        {fe.skills && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.skills}</p>}
-      </fieldset>
       <Field label="Full name" error={fe.fullName} required htmlFor="j-name"><Input id="j-name" value={f.fullName} onChange={on("fullName")} autoComplete="name" aria-invalid={!!fe.fullName} /></Field>
       <Field label="Email" error={fe.email} required htmlFor="j-email"><Input id="j-email" type="email" value={f.email} onChange={on("email")} autoComplete="email" aria-invalid={!!fe.email} /></Field>
       <Field label="Phone" error={fe.phone} required htmlFor="j-phone"><Input id="j-phone" type="tel" value={f.phone} onChange={on("phone")} autoComplete="tel" aria-invalid={!!fe.phone} /></Field>
@@ -55,6 +45,36 @@ export function JoinForm({ markets }: { markets: { slug: string; label: string }
         <AddressInput id="j-home" value={f.homeAddress} onChange={(v) => set("homeAddress", v)} aria-invalid={!!fe.homeAddress}
           hint="Used to work out how far each wedding is from you. Never shown to couples." placeholder="Street address you travel from" />
       </Field>
+      <fieldset aria-invalid={!!fe.skills || undefined}>
+        <legend className="text-[13px] font-medium text-midnight-700">What do you do? <span className="text-blush-500">*</span></legend>
+        <p className="mb-2.5 mt-0.5 text-[12px] text-muted">Choose all that apply — you&apos;ll see and can request jobs for each one.</p>
+        <div className="space-y-2" role="group" aria-label="What do you do?">
+          {SKILL_CARDS.map(({ value: v, label, blurb, icon: I }) => {
+            const on = f.skills.includes(v);
+            return (
+              <label key={v} className={cn(
+                "group flex cursor-pointer items-center gap-3.5 rounded-2xl border bg-white p-3.5 transition has-[:focus-visible]:ring-4 has-[:focus-visible]:ring-midnight-100",
+                on ? "border-midnight-900 bg-midnight-50/40 shadow-sm" : "border-line hover:border-midnight-200 hover:bg-canvas/60",
+              )}>
+                <input type="checkbox" name="skills" value={v} checked={on} className="sr-only"
+                  onChange={() => set("skills", on ? f.skills.filter((x) => x !== v) : [...f.skills, v])} />
+                <span className={cn("grid size-11 shrink-0 place-items-center rounded-xl transition", on ? "bg-midnight-900 text-white" : "bg-blush-50 text-blush-600")}>
+                  <I className="size-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-semibold text-ink">{label}</span>
+                  <span className="block text-[12px] leading-snug text-muted">{blurb}</span>
+                </span>
+                <span aria-hidden className={cn("grid size-6 shrink-0 place-items-center rounded-full border-2 transition",
+                  on ? "border-midnight-900 bg-midnight-900 text-white" : "border-midnight-200 text-transparent group-hover:border-midnight-300")}>
+                  <Check className="size-3.5" strokeWidth={3} />
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        {fe.skills && <p className="mt-1.5 text-[12px] font-medium text-danger-500" role="alert">{fe.skills}</p>}
+      </fieldset>
       <Field label="Market you'll mostly work in" error={fe.market} required htmlFor="j-market">
         <Select id="j-market" value={f.market} onChange={on("market")} aria-invalid={!!fe.market}><option value="">Select…</option>{markets.map((m) => <option key={m.slug} value={m.slug}>{m.label}</option>)}</Select>
       </Field>
