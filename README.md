@@ -13,10 +13,10 @@ Built with **Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4
 
 | Role | Email |
 | --- | --- |
-| Photographer | marcus@visualweddings.test |
-| Videographer | daniel@visualweddings.test |
-| Client | sarah@visualweddings.test |
-| Coordinator | grace@visualweddings.test |
+| Photographer | marcus@thevisualweddings.com |
+| Videographer | daniel@thevisualweddings.com |
+| Client | sarah@thevisualweddings.com |
+| Coordinator | grace@thevisualweddings.com |
 
 Test cards: `4242 4242 4242 4242` succeeds · `4000 0000 0000 0002` is declined · `4000 0000 0000 9995` insufficient funds.
 

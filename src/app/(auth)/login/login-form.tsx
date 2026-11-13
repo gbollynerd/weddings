@@ -6,10 +6,10 @@ import { Field, Input, Alert } from "@/components/ui";
 import { SubmitButton } from "@/components/ui/interactive";
 
 const DEMO = [
-  { label: "Photographer", email: "marcus@visualweddings.test", icon: Camera },
-  { label: "Videographer", email: "daniel@visualweddings.test", icon: Video },
-  { label: "Client", email: "sarah@visualweddings.test", icon: Heart },
-  { label: "Coordinator", email: "grace@visualweddings.test", icon: ShieldCheck },
+  { label: "Photographer", email: "marcus@thevisualweddings.com", icon: Camera },
+  { label: "Videographer", email: "daniel@thevisualweddings.com", icon: Video },
+  { label: "Client", email: "sarah@thevisualweddings.com", icon: Heart },
+  { label: "Coordinator", email: "grace@thevisualweddings.com", icon: ShieldCheck },
 ];
 
 export function LoginForm({ next }: { next?: string }) {
