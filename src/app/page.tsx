@@ -193,7 +193,7 @@ export default async function Landing() {
       {/* 9 · FAQ */}
       <section id="faq" className="scroll-mt-20 bg-white py-24">
         <div className="mx-auto grid max-w-7xl gap-12 px-5 sm:px-8 lg:grid-cols-[1fr_1.4fr]">
-          <div><p className="text-sm font-semibold uppercase tracking-[0.2em] text-blush-500">FAQ</p><h2 className="mt-3 font-serif text-4xl text-ink sm:text-5xl">Questions, answered.</h2><p className="mt-4 text-muted">Can&apos;t find what you need? Book a free planning call from your dashboard or email hello@visualweddings.example.</p></div>
+          <div><p className="text-sm font-semibold uppercase tracking-[0.2em] text-blush-500">FAQ</p><h2 className="mt-3 font-serif text-4xl text-ink sm:text-5xl">Questions, answered.</h2><p className="mt-4 text-muted">Can&apos;t find what you need? Book a free planning call from your dashboard or email hello@thevisualweddings.com.</p></div>
           <div className="divide-y divide-line rounded-3xl border border-line">
             {[
               ["How far in advance should we book?", "Popular Saturdays book 9–12 months ahead. You can book any date at least 14 days away, and our availability check shows you instantly if your date is open."],

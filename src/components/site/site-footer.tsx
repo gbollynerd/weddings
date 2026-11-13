@@ -11,7 +11,7 @@ export function SiteFooter() {
           <p className="mt-4 max-w-xs text-sm leading-6">Modern wedding photography and film, booked in minutes and delivered by a vetted local team.</p>
           <div className="mt-5 space-y-2 text-sm">
             <p className="flex items-center gap-2"><Phone className="size-4 text-blush-300" />(704) 555-0140</p>
-            <p className="flex items-center gap-2"><Mail className="size-4 text-blush-300" />hello@visualweddings.example</p>
+            <p className="flex items-center gap-2"><Mail className="size-4 text-blush-300" />hello@thevisualweddings.com</p>
           </div>
         </div>
         {[

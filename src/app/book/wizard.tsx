@@ -177,7 +177,7 @@ export function BookingWizard({ catalog, me: initialMe, initial }: { catalog: Ca
                 <Field label="Venue address" className="sm:col-span-2" htmlFor="bk-address"><AddressInput id="bk-address" value={d.venueAddress} onChange={(v) => { set("venueAddress", v); setAddrTrusted(false); }} trusted={addrTrusted} hint="Optional — helps us plan travel" placeholder="Start typing the street address" /></Field>
               </div>
               <AvailabilityCard avail={avail} checking={checking} date={d.date} city={market ? `${market.city}, ${market.state}` : ""} onPick={(x) => set("date", x)} />
-              <p className="mt-4 text-[13px] text-muted">Getting married somewhere else? <Link href="mailto:hello@visualweddings.example" className="font-medium text-blush-600 underline">Ask about destination weddings</Link>.</p>
+              <p className="mt-4 text-[13px] text-muted">Getting married somewhere else? <Link href="mailto:hello@thevisualweddings.com" className="font-medium text-blush-600 underline">Ask about destination weddings</Link>.</p>
             </Section>
           )}
 
