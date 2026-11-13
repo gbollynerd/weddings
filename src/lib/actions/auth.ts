@@ -10,7 +10,7 @@ import { geocodeAddress } from "@/lib/geocode";
 import { notify } from "@/lib/services/notifications";
 import type { ActionResult } from "./types";
 
-const safeNext = (n: unknown) => (typeof n === "string" && n.startsWith("/") && !n.startsWith("//") ? n : null);
+const safeNext = (n: unknown) => (typeof n === "string" && n.startsWith("/") && !n.startsWith("//") && !n.startsWith("/\\") ? n : null);
 
 export async function loginAction(_: ActionResult | null, form: FormData): Promise<ActionResult> {
   const email = String(form.get("email") ?? "").trim();
@@ -55,6 +55,14 @@ export async function signupClient(input: z.input<typeof SignupSchema>): Promise
   });
   await createSession(userId);
   return { ok: true, data: { userId } };
+}
+
+/** Used by the sign-up wizards to flag an already-registered email before the last step. */
+export async function emailAvailableAction(email: string): Promise<ActionResult> {
+  const parsed = Email.safeParse(email);
+  if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Enter a valid email address" };
+  const [exists] = await sql`select 1 from users where lower(email) = lower(${parsed.data})`;
+  return exists ? { ok: false, message: "An account with this email already exists. Log in instead." } : { ok: true };
 }
 
 export async function signupAction(_: ActionResult | null, form: FormData): Promise<ActionResult> {

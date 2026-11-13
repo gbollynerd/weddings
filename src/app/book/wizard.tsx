@@ -480,7 +480,7 @@ function AccountStep({ me, details, onDone }: { me: Me; details: Details; onDone
           )}
           <Button type="submit" size="lg" className="w-full" loading={pending}>{mode === "create" ? "Create account & continue" : "Log in & continue"}</Button>
           {mode === "create" && <p className="text-center text-[12px] text-muted">Account name: {details.partnerOne} & {details.partnerTwo}</p>}
-          {mode === "login" && <p className="text-center text-[12px] text-muted">Demo client: sarah@thevisualweddings.com / demo1234</p>}
+          {mode === "login" && (process.env.NEXT_PUBLIC_SHOW_DEMO ? process.env.NEXT_PUBLIC_SHOW_DEMO === "1" : process.env.NODE_ENV !== "production") && <p className="text-center text-[12px] text-muted">Demo client: sarah@thevisualweddings.com / demo1234</p>}
         </form>
       </div>
     </Section>
